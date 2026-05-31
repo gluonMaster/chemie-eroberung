@@ -31,6 +31,38 @@
     return Array.isArray(value) ? value : [];
   }
 
+  function asList(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    return value == null || value === "" ? [] : [value];
+  }
+
+  function getChoiceAnswerIds(question) {
+    if (!question) {
+      return [];
+    }
+    if (question.type === "multiple_choice") {
+      return asList(question.answers || question.answer || question.correctAnswer);
+    }
+    return asList(question.answer || question.correctAnswer);
+  }
+
+  function getCorrectOrder(question) {
+    return asArray(question && (question.correctOrder || question.order || question.answer));
+  }
+
+  function getItemCategoryId(item) {
+    return item && (item.correctCategoryId || item.categoryId);
+  }
+
+  function getShortAnswerTerms(group) {
+    if (Array.isArray(group)) {
+      return group;
+    }
+    return asArray(group && (group.accepted || group.terms));
+  }
+
   function normalizeFormula(value) {
     var text = String(value == null ? "" : value).trim().replace(/\s+/g, "");
     var output = "";
@@ -157,7 +189,14 @@
             optionIds[option.id] = true;
           }
         });
-        asArray(question.answer).concat(question.correctAnswer || []).forEach(function checkOption(answerId) {
+        if (Object.keys(optionIds).length === 0) {
+          blocking.push("у выбора нет options");
+        }
+        var choiceAnswerIds = getChoiceAnswerIds(question);
+        if (choiceAnswerIds.length === 0) {
+          blocking.push("у выбора нет answer/answers");
+        }
+        choiceAnswerIds.forEach(function checkOption(answerId) {
           if (answerId && !hasOwn(optionIds, answerId)) {
             blocking.push("ответ ссылается на отсутствующий option id " + answerId);
           }
@@ -189,8 +228,11 @@
           }
         });
         asArray(question.items).forEach(function checkItem(item) {
-          if (item && item.categoryId && !hasOwn(categories, item.categoryId)) {
-            blocking.push("item ссылается на отсутствующую категорию " + item.categoryId);
+          var itemCategoryId = getItemCategoryId(item);
+          if (!itemCategoryId) {
+            blocking.push("у item нет correctCategoryId");
+          } else if (!hasOwn(categories, itemCategoryId)) {
+            blocking.push("item ссылается на отсутствующую категорию " + itemCategoryId);
           }
         });
       }
@@ -202,11 +244,27 @@
             itemIds[item.id] = true;
           }
         });
-        asArray(question.order || question.answer).forEach(function checkOrder(itemId) {
+        var correctOrder = getCorrectOrder(question);
+        if (correctOrder.length === 0) {
+          blocking.push("у ordering нет correctOrder");
+        }
+        correctOrder.forEach(function checkOrder(itemId) {
           if (itemId && !hasOwn(itemIds, itemId)) {
             blocking.push("порядок содержит неизвестный item id " + itemId);
           }
         });
+      }
+
+      if (question && question.type === "true_false") {
+        if (!Array.isArray(question.statements) || question.statements.length === 0) {
+          blocking.push("у true_false нет statements");
+        } else {
+          question.statements.forEach(function checkStatement(statement) {
+            if (!statement || !statement.id || !statement.text || typeof statement.answer !== "boolean") {
+              blocking.push("у true_false statement нет id/text/answer");
+            }
+          });
+        }
       }
 
       if (question && question.type === "short_answer") {
@@ -318,8 +376,7 @@
   }
 
   function checkChoice(question, answer) {
-    var expected = question.answer || question.correctAnswer || [];
-    var expectedList = Array.isArray(expected) ? expected.slice().sort() : [expected];
+    var expectedList = getChoiceAnswerIds(question).slice().sort();
     var answerList = Array.isArray(answer) ? answer.slice().sort() : [answer];
     return expectedList.length === answerList.length && expectedList.every(function compare(value, index) {
       return String(value) === String(answerList[index]);
@@ -340,7 +397,7 @@
   }
 
   function checkOrdering(question, answer) {
-    var expected = asArray(question.order || question.answer);
+    var expected = getCorrectOrder(question);
     var actual = asArray(answer);
     return expected.length === actual.length && expected.every(function compare(item, index) {
       return String(item) === String(actual[index]);
@@ -355,8 +412,8 @@
     }
     return expectedPairs.every(function pairExists(pair) {
       return actualPairs.some(function compare(actual) {
-        return String(actual.leftId || actual[0]) === String(pair.leftId || pair[0])
-          && String(actual.rightId || actual[1]) === String(pair.rightId || pair[1]);
+        return String(actual.leftId || actual.left || actual[0]) === String(pair.leftId || pair.left || pair[0])
+          && String(actual.rightId || actual.right || actual[1]) === String(pair.rightId || pair.right || pair[1]);
       });
     });
   }
@@ -365,7 +422,15 @@
     var items = asArray(question.items);
     var actual = answer && typeof answer === "object" ? answer : {};
     return items.every(function checkItem(item) {
-      return item && String(actual[item.id]) === String(item.categoryId);
+      return item && String(actual[item.id]) === String(getItemCategoryId(item));
+    });
+  }
+
+  function checkTrueFalse(question, answer) {
+    var statements = asArray(question.statements);
+    var actual = answer && typeof answer === "object" ? answer : {};
+    return statements.length > 0 && statements.every(function checkStatement(statement) {
+      return Boolean(actual[statement.id]) === Boolean(statement.answer);
     });
   }
 
@@ -375,7 +440,7 @@
     var foundGroups = [];
 
     groups.forEach(function checkGroup(group, index) {
-      var terms = Array.isArray(group) ? group : asArray(group && group.terms);
+      var terms = getShortAnswerTerms(group);
       var found = terms.some(function hasTerm(term) {
         return text.indexOf(normalizeText(term)) !== -1;
       });
@@ -408,7 +473,7 @@
       return { correct: checkChoice(question, answer), needsSelfCheck: false, details: null };
     }
     if (question.type === "true_false") {
-      return { correct: Boolean(answer) === Boolean(question.answer), needsSelfCheck: false, details: null };
+      return { correct: checkTrueFalse(question, answer), needsSelfCheck: false, details: null };
     }
     if (question.type === "fill_blank") {
       return { correct: checkFillBlank(question, answer), needsSelfCheck: false, details: null };
@@ -440,7 +505,7 @@
       return question.correctAnswerText;
     }
     if (question.type === "single_choice" || question.type === "multiple_choice") {
-      var answerIds = asArray(question.answer || question.correctAnswer);
+      var answerIds = getChoiceAnswerIds(question);
       return asArray(question.options).filter(function isCorrect(option) {
         return option && answerIds.indexOf(option.id) !== -1;
       }).map(function optionText(option) {
@@ -453,7 +518,22 @@
       }).join(", ");
     }
     if (question.type === "ordering") {
-      return asArray(question.order || question.answer).join(" ");
+      return getCorrectOrder(question).join(" ");
+    }
+    if (question.type === "true_false") {
+      return asArray(question.statements).map(function statementText(statement) {
+        return statement.text + " — " + (statement.answer ? "richtig" : "falsch");
+      }).join("; ");
+    }
+    if (question.type === "categorization") {
+      return asArray(question.items).map(function itemText(item) {
+        return item.text + " → " + getItemCategoryId(item);
+      }).join("; ");
+    }
+    if (question.type === "matching") {
+      return asArray(question.pairs).map(function pairText(item) {
+        return (item.left || item.leftId || item[0]) + " → " + (item.right || item.rightId || item[1]);
+      }).join("; ");
     }
     return String(question.answer || "");
   }

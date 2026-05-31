@@ -344,26 +344,26 @@
   }
 
   function renderDictionary() {
-    setHeader("Словарь", "Заготовка экрана терминов");
+    setHeader("Словарь", "Термины из банка данных");
     var terms = Array.isArray(DATA.terms) ? DATA.terms : [];
     app.innerHTML = '' +
       '<section class="panel list-panel">' +
-        '<div class="screen-head"><div><h1>Словарь терминов</h1><p>Поиск и фильтры будут подключены вместе с банком терминов.</p></div><button class="soft-btn" type="button" data-local-route="start">На старт</button></div>' +
+        '<div class="screen-head"><div><h1>Словарь терминов</h1><p>Сейчас показаны реальные карточки из `CHEMIE_DATA.terms`; поиск и фильтры будут отдельным шагом.</p></div><button class="soft-btn" type="button" data-local-route="start">На старт</button></div>' +
         (terms.length ? '<div class="card-grid">' + terms.map(renderTerm).join("") + '</div>' : '<div class="empty-state"><h2>Термины пока не добавлены</h2><p>Структура `CHEMIE_DATA.terms` готова для следующей сессии.</p></div>') +
       '</section>';
     wireLocalRouteButtons();
   }
 
   function renderTerm(term) {
-    return '<article class="mini-card"><h2>' + esc(term.term || term.id) + '</h2><p>' + esc(term.ru || "") + '</p></article>';
+    return '<article class="mini-card"><p class="eyebrow">' + esc(term.category || "") + '</p><h2>' + esc(term.term || term.id) + '</h2><p>' + esc(term.ru || "") + '</p><p class="muted">' + esc(term.de || "") + '</p></article>';
   }
 
   function renderAnswers() {
-    setHeader("Готовые ответы", "Заготовка немецких формулировок");
+    setHeader("Готовые ответы", "Немецкие формулировки из банка данных");
     var answers = Array.isArray(DATA.readyAnswers) ? DATA.readyAnswers : [];
     app.innerHTML = '' +
       '<section class="panel list-panel">' +
-        '<div class="screen-head"><div><h1>Готовые немецкие ответы</h1><p>Карточки будут храниться в `CHEMIE_DATA.readyAnswers`.</p></div><button class="soft-btn" type="button" data-local-route="start">На старт</button></div>' +
+        '<div class="screen-head"><div><h1>Готовые немецкие ответы</h1><p>Короткие формулировки для повторения тем Luft и Wasser.</p></div><button class="soft-btn" type="button" data-local-route="start">На старт</button></div>' +
         (answers.length ? '<div class="card-grid">' + answers.map(renderReadyAnswer).join("") + '</div>' : '<div class="empty-state"><h2>Ответы пока не добавлены</h2><p>Экран и маршрут уже подготовлены.</p></div>') +
       '</section>';
     wireLocalRouteButtons();
