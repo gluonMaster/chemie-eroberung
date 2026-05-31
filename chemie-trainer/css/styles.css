@@ -38,12 +38,21 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
 button {
   cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: .62;
 }
 
 button:focus-visible,
@@ -527,6 +536,22 @@ legend {
   background: var(--brand-soft);
 }
 
+.answer-check {
+  grid-template-columns: 22px 38px 1fr;
+  cursor: pointer;
+}
+
+.answer-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--brand);
+}
+
+.answer-check:has(input:checked) {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
 .answer-letter {
   display: grid;
   width: 34px;
@@ -536,6 +561,196 @@ legend {
   color: #fff;
   background: var(--brand);
   font-weight: 800;
+}
+
+.question-ru {
+  margin-bottom: 8px;
+}
+
+.meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 12px 0 16px;
+}
+
+.meta-chips span {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.answer-form {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.answer-actions {
+  margin-top: 0;
+}
+
+.matching-grid,
+.tf-list,
+.category-item-list {
+  display: grid;
+  gap: 10px;
+}
+
+.matching-row,
+.category-item-row {
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(220px, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.matching-left {
+  font-weight: 800;
+}
+
+.matching-row select,
+.category-item-row select {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.fill-template {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 18px;
+  line-height: 2.2;
+}
+
+.blank-input {
+  width: min(130px, 100%);
+  min-height: 38px;
+  margin: 0 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.blank-field {
+  margin: 10px 0;
+}
+
+.ordering-builder,
+.category-zones {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ordering-column,
+.category-zone {
+  min-height: 160px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.ordering-column h3,
+.category-zone h3 {
+  margin-bottom: 10px;
+  font-size: 17px;
+}
+
+.ordering-bank,
+.ordering-answer,
+.category-zone-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.order-chip,
+.order-answer-chip,
+.category-chip {
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.order-answer-chip {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  border-color: #c8d9d6;
+  background: var(--brand-soft);
+}
+
+.order-answer-chip span {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--brand);
+  font-size: 13px;
+}
+
+.category-chip {
+  display: inline-flex;
+  background: #fff;
+}
+
+.tf-statement {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+}
+
+.tf-statement legend {
+  flex-basis: 100%;
+  color: var(--text);
+}
+
+.tf-statement label {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-weight: 700;
+}
+
+textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 10px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
 }
 
 .feedback-list {
@@ -679,7 +894,11 @@ legend {
   .type-grid,
   .feedback-list,
   .progress-columns,
-  .compact-metrics {
+  .compact-metrics,
+  .matching-row,
+  .category-item-row,
+  .ordering-builder,
+  .category-zones {
     grid-template-columns: 1fr;
   }
 

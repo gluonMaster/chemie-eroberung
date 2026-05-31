@@ -15,6 +15,8 @@
   var progress = null;
   var validation = null;
   var answerLocked = false;
+  var dictionaryTermFilterIds = null;
+  var loggedExplanationFallbacks = {};
 
   var TYPE_LABELS = {
     single_choice: "Выбор ответа",
@@ -143,6 +145,95 @@
       }
     }
     return null;
+  }
+
+  function getTermById(termId) {
+    var terms = asArray(DATA.terms);
+    for (var i = 0; i < terms.length; i += 1) {
+      if (terms[i] && String(terms[i].id) === String(termId)) {
+        return terms[i];
+      }
+    }
+    return null;
+  }
+
+  function termLabel(termId) {
+    var term = getTermById(termId);
+    if (!term) {
+      return String(termId || "");
+    }
+    return term.term || term.id;
+  }
+
+  function getOptionText(question, optionId) {
+    var options = asArray(question && question.options);
+    for (var i = 0; i < options.length; i += 1) {
+      if (options[i] && String(options[i].id) === String(optionId)) {
+        return options[i].text || options[i].label || options[i].id;
+      }
+    }
+    return String(optionId || "");
+  }
+
+  function getItemText(question, itemId) {
+    var items = asArray(question && question.items);
+    for (var i = 0; i < items.length; i += 1) {
+      if (items[i] && String(items[i].id) === String(itemId)) {
+        return items[i].text || items[i].label || items[i].id;
+      }
+    }
+    return String(itemId || "");
+  }
+
+  function getCategoryId(category) {
+    return typeof category === "string" ? category : category && category.id;
+  }
+
+  function getCategoryLabel(category) {
+    return typeof category === "string" ? category : category && (category.label || category.text || category.id);
+  }
+
+  function getCategoryLabelById(question, categoryId) {
+    var categories = asArray(question && question.categories);
+    for (var i = 0; i < categories.length; i += 1) {
+      if (String(getCategoryId(categories[i])) === String(categoryId)) {
+        return getCategoryLabel(categories[i]) || String(categoryId || "");
+      }
+    }
+    return String(categoryId || "");
+  }
+
+  function getPairSide(pair, left) {
+    if (Array.isArray(pair)) {
+      return left ? pair[0] : pair[1];
+    }
+    if (!pair) {
+      return "";
+    }
+    return left
+      ? (pair.leftId || pair.left || pair.source || pair.term || "")
+      : (pair.rightId || pair.right || pair.target || pair.match || "");
+  }
+
+  function hashString(value) {
+    var hash = 0;
+    var text = String(value || "");
+    for (var i = 0; i < text.length; i += 1) {
+      hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash);
+  }
+
+  function stableShuffle(values, seed) {
+    var result = values.slice();
+    var base = hashString(seed);
+    for (var i = result.length - 1; i > 0; i -= 1) {
+      var j = (base + i * 17 + hashString(result[i])) % (i + 1);
+      var temp = result[i];
+      result[i] = result[j];
+      result[j] = temp;
+    }
+    return result;
   }
 
   function questionTitle(question) {
@@ -448,6 +539,7 @@
       queueCursor: queueState.queueCursor,
       round: queueState.round,
       currentQuestionId: null,
+      answerSubmitted: false,
       restoredQuestion: false,
       repeatedQuestionRound: false,
       turns: 0,
@@ -539,6 +631,7 @@
     game.round = queue.round;
     game.repeatedQuestionRound = Boolean(queue.repeated);
     game.currentQuestionId = question.id;
+    game.answerSubmitted = false;
     game.currentQuestionStartedAt = nowIso();
     game.currentQuestionOvertime = false;
     game.restoredQuestion = false;
@@ -591,6 +684,31 @@
     return renderQuestion(game, question);
   }
 
+  function renderQuestionMeta(question) {
+    var chips = [];
+    if (question.subtopic) {
+      chips.push("Subtopic: " + question.subtopic);
+    }
+    if (question.difficulty != null && question.difficulty !== "") {
+      chips.push("Niveau " + question.difficulty);
+    }
+    asArray(question.tags).forEach(function addTag(tag) {
+      chips.push(String(tag));
+    });
+
+    return chips.length
+      ? '<div class="meta-chips">' + chips.map(function chip(text) {
+        return '<span>' + esc(text) + '</span>';
+      }).join("") + '</div>'
+      : "";
+  }
+
+  function renderRelatedTermsButton(question, id) {
+    return asArray(question && question.relatedTerms).length
+      ? '<button class="soft-btn" type="button" id="' + esc(id) + '">Открыть термины</button>'
+      : "";
+  }
+
   function renderQuestion(game, question) {
     var progressStats = progress.perQuestion && progress.perQuestion[question.id] ? progress.perQuestion[question.id] : null;
     var modeText = game.phase === "practice" ? "Учебная попытка" : (MODE_LABELS[game.topicMode] || game.topicMode);
@@ -606,9 +724,10 @@
 
     return '' +
       '<p class="eyebrow">' + esc(modeText) + ' · ' + esc(TYPE_LABELS[question.type] || question.type) + ' · ' + esc(question.id) + '</p>' +
-      '<h2>' + esc(question.questionDe) + '</h2>' +
-      '<p>' + esc(question.questionRu) + '</p>' +
+      '<h2 lang="de">' + esc(question.questionDe) + '</h2>' +
+      '<p class="question-ru">' + esc(question.questionRu) + '</p>' +
       (question.instructionRu ? '<p class="muted">' + esc(question.instructionRu) + '</p>' : "") +
+      renderQuestionMeta(question) +
       restored +
       repeated +
       timerWarning +
@@ -621,6 +740,7 @@
       '</div>' +
       '<div class="action-row">' +
         '<button class="soft-btn" type="button" id="showCorrectAnswer">Показать правильный ответ</button>' +
+        renderRelatedTermsButton(question, "openQuestionTerms") +
         '<button class="soft-btn" type="button" data-local-route="dictionary">Словарь</button>' +
         '<button class="soft-btn" type="button" data-local-route="start">На старт</button>' +
       '</div>';
@@ -636,14 +756,222 @@
       }).join("") + '</div>';
     }
 
+    if (question.type === "multiple_choice") {
+      return renderMultipleChoiceUi(question);
+    }
+    if (question.type === "matching") {
+      return renderMatchingUi(question);
+    }
+    if (question.type === "fill_blank") {
+      return renderFillBlankUi(question);
+    }
+    if (question.type === "ordering") {
+      return renderOrderingUi(question);
+    }
+    if (question.type === "true_false") {
+      return renderTrueFalseUi(question);
+    }
+    if (question.type === "categorization") {
+      return renderCategorizationUi(question);
+    }
+    if (question.type === "short_answer") {
+      return renderShortAnswerUi(question);
+    }
+
+    return '<div class="notice notice-warn">Для типа `' + esc(question.type) + '` пока нет рендера.</div>';
+  }
+
+  function renderSubmitRow(extraButton) {
+    return '<div class="action-row answer-actions">' +
+      '<button class="primary-btn" type="submit" id="submitAnswer">Проверить</button>' +
+      (extraButton || "") +
+    '</div>';
+  }
+
+  function renderMultipleChoiceUi(question) {
     return '' +
-      '<div class="notice notice-info">' +
-        '<strong>Временный диагностический режим.</strong> Полный рендерер типа `' + esc(question.type) + '` будет добавлен в сессии 05. Сейчас можно проверить игровой цикл кнопками результата.' +
-      '</div>' +
-      '<div class="action-row">' +
-        '<button class="primary-btn" type="button" id="diagnosticCorrect">Засчитать правильный ответ</button>' +
-        '<button class="danger-btn" type="button" id="diagnosticIncorrect">Засчитать ошибку</button>' +
-      '</div>';
+      '<form id="answerForm" class="answer-form" data-answer-type="multiple_choice">' +
+        '<div class="answer-list">' + asArray(question.options).map(function renderOption(option) {
+          return '<label class="answer-option answer-check">' +
+            '<input type="checkbox" name="answerOption" value="' + esc(option.id) + '">' +
+            '<span class="answer-letter">' + esc(option.id) + '</span>' +
+            '<span>' + esc(option.text || option.label || option.id) + '</span>' +
+          '</label>';
+        }).join("") + '</div>' +
+        renderSubmitRow("") +
+      '</form>';
+  }
+
+  function renderMatchingUi(question) {
+    var pairs = asArray(question.pairs);
+    var rightValues = stableShuffle(pairs.map(function right(pair) {
+      return getPairSide(pair, false);
+    }), question.id + ":matching");
+
+    return '' +
+      '<form id="answerForm" class="answer-form matching-form" data-answer-type="matching">' +
+        '<div class="matching-grid">' + pairs.map(function renderPair(pair, index) {
+          var left = getPairSide(pair, true);
+          return '<label class="matching-row">' +
+            '<span class="matching-left">' + esc(left) + '</span>' +
+            '<select required data-match-left="' + esc(left) + '" aria-label="Пара для ' + esc(left) + '">' +
+              '<option value="">Выбери пару</option>' +
+              rightValues.map(function option(right) {
+                return '<option value="' + esc(right) + '">' + esc(right) + '</option>';
+              }).join("") +
+            '</select>' +
+          '</label>';
+        }).join("") + '</div>' +
+        renderSubmitRow("") +
+      '</form>';
+  }
+
+  function renderFillBlankTemplate(question) {
+    var blanks = asArray(question.blanks);
+    var template = String(question.template || "");
+    var parts = template.split("___");
+    var html = "";
+
+    parts.forEach(function renderPart(part, index) {
+      html += esc(part);
+      if (index < parts.length - 1) {
+        var blank = blanks[index] || { id: "blank_" + String(index + 1) };
+        html += '<input class="blank-input" type="text" autocomplete="off" data-blank-id="' + esc(blank.id || index) + '" aria-label="Пропуск ' + esc(index + 1) + '" required>';
+      }
+    });
+
+    if (parts.length === 1) {
+      html += blanks.map(function renderBlank(blank, index) {
+        return '<label class="field blank-field"><span>' + esc(blank.id || ("Пропуск " + String(index + 1))) + '</span>' +
+          '<input class="blank-input" type="text" autocomplete="off" data-blank-id="' + esc(blank.id || index) + '" required></label>';
+      }).join("");
+    }
+
+    return html;
+  }
+
+  function renderFillBlankUi(question) {
+    return '' +
+      '<form id="answerForm" class="answer-form" data-answer-type="fill_blank">' +
+        '<div class="fill-template">' + renderFillBlankTemplate(question) + '</div>' +
+        renderSubmitRow("") +
+      '</form>';
+  }
+
+  function renderOrderingUi(question) {
+    return '' +
+      '<form id="answerForm" class="answer-form" data-answer-type="ordering">' +
+        '<div class="ordering-builder">' +
+          '<section class="ordering-column">' +
+            '<h3>Банк элементов</h3>' +
+            '<div class="ordering-bank">' + asArray(question.items).map(function renderItem(item) {
+              return '<button class="soft-btn order-chip" type="button" data-order-pick="' + esc(item.id) + '">' + esc(item.text || item.label || item.id) + '</button>';
+            }).join("") + '</div>' +
+          '</section>' +
+          '<section class="ordering-column">' +
+            '<h3>Текущий ответ</h3>' +
+            '<div id="orderingAnswer" class="ordering-answer" aria-live="polite"><p class="muted empty-answer">Пока ничего не выбрано.</p></div>' +
+            '<button class="soft-btn" type="button" id="resetOrdering">Сбросить порядок</button>' +
+          '</section>' +
+        '</div>' +
+        renderSubmitRow("") +
+      '</form>';
+  }
+
+  function renderTrueFalseUi(question) {
+    return '' +
+      '<form id="answerForm" class="answer-form" data-answer-type="true_false">' +
+        '<div class="tf-list">' + asArray(question.statements).map(function renderStatement(statement) {
+          var groupName = "tf_" + String(question.id) + "_" + String(statement.id);
+          return '<fieldset class="tf-statement">' +
+            '<legend>' + esc(statement.text) + '</legend>' +
+            '<label><input type="radio" name="' + esc(groupName) + '" data-statement-id="' + esc(statement.id) + '" value="true" required> richtig</label>' +
+            '<label><input type="radio" name="' + esc(groupName) + '" data-statement-id="' + esc(statement.id) + '" value="false" required> falsch</label>' +
+          '</fieldset>';
+        }).join("") + '</div>' +
+        renderSubmitRow("") +
+      '</form>';
+  }
+
+  function renderCategorizationUi(question) {
+    var categories = asArray(question.categories);
+    var categoryOptions = categories.map(function renderCategoryOption(category) {
+      return '<option value="' + esc(getCategoryId(category)) + '">' + esc(getCategoryLabel(category)) + '</option>';
+    }).join("");
+
+    return '' +
+      '<form id="answerForm" class="answer-form" data-answer-type="categorization">' +
+        '<div class="category-zones">' + categories.map(function renderZone(category) {
+          return '<section class="category-zone" data-category-zone="' + esc(getCategoryId(category)) + '">' +
+            '<h3>' + esc(getCategoryLabel(category)) + '</h3>' +
+            '<div class="category-zone-items"><p class="muted">Пока пусто</p></div>' +
+          '</section>';
+        }).join("") + '</div>' +
+        '<div class="category-item-list">' + asArray(question.items).map(function renderItem(item) {
+          return '<label class="category-item-row">' +
+            '<span>' + esc(item.text || item.label || item.id) + '</span>' +
+            '<select required data-category-item="' + esc(item.id) + '" data-category-label="' + esc(item.text || item.label || item.id) + '">' +
+              '<option value="">Выбери категорию</option>' + categoryOptions +
+            '</select>' +
+          '</label>';
+        }).join("") + '</div>' +
+        renderSubmitRow("") +
+      '</form>';
+  }
+
+  function renderShortAnswerUi(question) {
+    return '' +
+      '<form id="answerForm" class="answer-form" data-answer-type="short_answer">' +
+        '<label class="field"><span>Короткий ответ по-немецки</span><textarea id="shortAnswerInput" rows="5" required placeholder="Schreibe deine Antwort..."></textarea></label>' +
+        '<div class="notice notice-info">Короткий ответ проверяется по обязательным Fachbegriffe. Подробная самооценка будет расширена отдельным шагом.</div>' +
+        renderSubmitRow("") +
+      '</form>';
+  }
+
+  function warnExplanationFallback(question) {
+    if (!question || (question.explanationRu && question.explanationDe)) {
+      return;
+    }
+    var key = question.id + ":explanation";
+    if (loggedExplanationFallbacks[key]) {
+      return;
+    }
+    loggedExplanationFallbacks[key] = true;
+    if (global.console && global.console.warn) {
+      global.console.warn(
+        "[CHEMIE_DATA] question " + question.id + ": нет explanationRu или explanationDe, используется fallback.",
+        question
+      );
+    }
+  }
+
+  function feedbackExplanationRu(question) {
+    if (!question) {
+      return "";
+    }
+    return question.explanationRu ||
+      question.hint ||
+      question.learningGoal ||
+      ("Правильный ответ: " + Engine.formatCorrectAnswer(question));
+  }
+
+  function feedbackExplanationDe(question) {
+    if (!question) {
+      return "";
+    }
+    return question.explanationDe ||
+      question.hint ||
+      question.learningGoal ||
+      ("Richtige Antwort: " + Engine.formatCorrectAnswer(question));
+  }
+
+  function renderTermChips(termIds) {
+    var ids = asArray(termIds);
+    return ids.length
+      ? '<div class="term-chips">' + ids.map(function chip(termId) {
+        return '<span>' + esc(termLabel(termId)) + '</span>';
+      }).join("") + '</div>'
+      : "";
   }
 
   function renderFeedback(game, question) {
@@ -654,30 +982,32 @@
       ? (feedback.practice ? "Учебная попытка засчитана" : "Правильно")
       : (feedback.reason === "timeout" ? "Время вышло" : "Разбор ошибки");
     var related = asArray(question && question.relatedTerms);
+    warnExplanationFallback(question);
 
     return '' +
       '<p class="eyebrow">' + esc(question ? question.id : "") + ' · ' + esc(feedback.practice ? "Учебный режим" : "Итог хода") + '</p>' +
       '<div class="notice ' + kind + '"><strong>' + esc(title) + '</strong><p>' + esc(feedback.summary || "") + '</p></div>' +
-      '<h2>' + esc(question ? question.questionDe : "") + '</h2>' +
+      '<h2 lang="de">' + esc(question ? question.questionDe : "") + '</h2>' +
       '<dl class="feedback-list">' +
         '<dt>Ответ ученика</dt><dd>' + esc(feedback.submittedAnswer || "нет ответа") + '</dd>' +
         '<dt>Правильный ответ</dt><dd>' + esc(feedback.correctAnswer || "") + '</dd>' +
-        '<dt>Объяснение</dt><dd>' + esc((question && question.explanationRu) || "Объяснение будет дополнено в банке данных.") + '</dd>' +
-        '<dt>Коротко по-немецки</dt><dd>' + esc((question && question.explanationDe) || "") + '</dd>' +
+        '<dt>Объяснение</dt><dd>' + esc(feedbackExplanationRu(question)) + '</dd>' +
+        '<dt>Kurz auf Deutsch</dt><dd>' + esc(feedbackExplanationDe(question)) + '</dd>' +
+        '<dt>Цель</dt><dd>' + esc((question && question.learningGoal) || "Закрепить правильный ответ и связанные термины.") + '</dd>' +
       '</dl>' +
-      (related.length ? '<div class="term-chips">' + related.map(function chip(termId) {
-        return '<span>' + esc(termId) + '</span>';
-      }).join("") + '</div>' : "") +
+      renderTermChips(related) +
       '<div class="action-row">' +
-        '<button class="primary-btn" type="button" id="continueGame">' + esc(feedback.practice ? "Продолжить партию" : "Продолжить") + '</button>' +
+        renderRelatedTermsButton(question, "openFeedbackTerms") +
         (!correct && !feedback.practice ? '<button class="soft-btn" type="button" id="practiceSimilar">Потренировать похожий</button>' : "") +
-        '<button class="soft-btn" type="button" data-local-route="dictionary">Открыть термины</button>' +
+        '<button class="primary-btn" type="button" id="continueGame">' + esc(feedback.practice ? "Продолжить партию" : "Продолжить") + '</button>' +
       '</div>';
   }
 
   function wireGameScreen(game, question) {
     answerLocked = false;
     wireLocalRouteButtons();
+    wireRelatedTermsButton("openQuestionTerms", question);
+    wireRelatedTermsButton("openFeedbackTerms", question);
 
     if (game.phase === "feedback" || game.phase === "practice_feedback") {
       var continueButton = byId("continueGame");
@@ -694,23 +1024,23 @@
       return;
     }
 
+    wireOrderingControls(question);
+    wireCategorizationControls(question);
+
     global.document.querySelectorAll("[data-answer-id]").forEach(function wireAnswer(button) {
       button.addEventListener("click", function submitAnswer() {
         handleAnswer(button.getAttribute("data-answer-id"), {});
       });
     });
 
-    var diagnosticCorrect = byId("diagnosticCorrect");
-    if (diagnosticCorrect) {
-      diagnosticCorrect.addEventListener("click", function forceCorrect() {
-        handleAnswer(null, { forceCorrect: true, reason: "diagnostic" });
-      });
-    }
-
-    var diagnosticIncorrect = byId("diagnosticIncorrect");
-    if (diagnosticIncorrect) {
-      diagnosticIncorrect.addEventListener("click", function forceIncorrect() {
-        handleAnswer(null, { forceCorrect: false, reason: "diagnostic" });
+    var answerForm = byId("answerForm");
+    if (answerForm) {
+      answerForm.addEventListener("submit", function submitForm(event) {
+        event.preventDefault();
+        if (typeof answerForm.reportValidity === "function" && !answerForm.reportValidity()) {
+          return;
+        }
+        handleAnswer(collectAnswer(question), {});
       });
     }
 
@@ -722,6 +1052,159 @@
     }
 
     startTimerForQuestion(game, question);
+  }
+
+  function wireRelatedTermsButton(id, question) {
+    var button = byId(id);
+    if (!button) {
+      return;
+    }
+    button.addEventListener("click", function openTerms() {
+      dictionaryTermFilterIds = asArray(question && question.relatedTerms).map(String);
+      setRoute("dictionary");
+    });
+  }
+
+  function lockCurrentQuestionUi() {
+    global.document.querySelectorAll(".question-panel button, .question-panel input, .question-panel select, .question-panel textarea").forEach(function disable(control) {
+      control.disabled = true;
+    });
+  }
+
+  function wireOrderingControls(question) {
+    if (!question || question.type !== "ordering" || !byId("orderingAnswer")) {
+      return;
+    }
+    var selected = [];
+
+    function renderSelected() {
+      var answerNode = byId("orderingAnswer");
+      if (!answerNode) {
+        return;
+      }
+      answerNode.innerHTML = selected.length
+        ? selected.map(function renderItem(itemId, index) {
+          return '<button class="order-answer-chip" type="button" data-order-remove="' + esc(itemId) + '">' +
+            '<span>' + esc(index + 1) + '</span>' + esc(getItemText(question, itemId)) +
+          '</button>';
+        }).join("")
+        : '<p class="muted empty-answer">Пока ничего не выбрано.</p>';
+
+      global.document.querySelectorAll("[data-order-pick]").forEach(function update(button) {
+        button.disabled = selected.indexOf(button.getAttribute("data-order-pick")) !== -1;
+      });
+      answerNode.querySelectorAll("[data-order-remove]").forEach(function wireRemove(button) {
+        button.addEventListener("click", function removeItem() {
+          selected = selected.filter(function keep(itemId) {
+            return itemId !== button.getAttribute("data-order-remove");
+          });
+          renderSelected();
+        });
+      });
+    }
+
+    global.document.querySelectorAll("[data-order-pick]").forEach(function wirePick(button) {
+      button.addEventListener("click", function pickItem() {
+        var itemId = button.getAttribute("data-order-pick");
+        if (selected.indexOf(itemId) === -1) {
+          selected.push(itemId);
+          renderSelected();
+        }
+      });
+    });
+
+    var reset = byId("resetOrdering");
+    if (reset) {
+      reset.addEventListener("click", function resetOrdering() {
+        selected = [];
+        renderSelected();
+      });
+    }
+    renderSelected();
+  }
+
+  function wireCategorizationControls(question) {
+    if (!question || question.type !== "categorization") {
+      return;
+    }
+
+    function updateZones() {
+      var grouped = {};
+      global.document.querySelectorAll("[data-category-zone]").forEach(function reset(zone) {
+        grouped[zone.getAttribute("data-category-zone")] = [];
+      });
+      global.document.querySelectorAll("[data-category-item]").forEach(function collect(select) {
+        var categoryId = select.value;
+        if (categoryId && grouped[categoryId]) {
+          grouped[categoryId].push(select.getAttribute("data-category-label"));
+        }
+      });
+      global.document.querySelectorAll("[data-category-zone]").forEach(function fill(zone) {
+        var categoryId = zone.getAttribute("data-category-zone");
+        var holder = zone.querySelector(".category-zone-items");
+        var items = grouped[categoryId] || [];
+        if (holder) {
+          holder.innerHTML = items.length
+            ? items.map(function chip(label) {
+              return '<span class="category-chip">' + esc(label) + '</span>';
+            }).join("")
+            : '<p class="muted">Пока пусто</p>';
+        }
+      });
+    }
+
+    global.document.querySelectorAll("[data-category-item]").forEach(function wireSelect(select) {
+      select.addEventListener("change", updateZones);
+    });
+    updateZones();
+  }
+
+  function collectAnswer(question) {
+    if (!question) {
+      return null;
+    }
+    if (question.type === "multiple_choice") {
+      return Array.prototype.slice.call(global.document.querySelectorAll('input[name="answerOption"]:checked')).map(function selected(input) {
+        return input.value;
+      });
+    }
+    if (question.type === "matching") {
+      var matching = {};
+      global.document.querySelectorAll("[data-match-left]").forEach(function collect(select) {
+        matching[select.getAttribute("data-match-left")] = select.value;
+      });
+      return matching;
+    }
+    if (question.type === "fill_blank") {
+      var blanks = {};
+      global.document.querySelectorAll("[data-blank-id]").forEach(function collect(input) {
+        blanks[input.getAttribute("data-blank-id")] = input.value;
+      });
+      return blanks;
+    }
+    if (question.type === "ordering") {
+      return Array.prototype.slice.call(global.document.querySelectorAll("#orderingAnswer [data-order-remove]")).map(function collect(button) {
+        return button.getAttribute("data-order-remove");
+      });
+    }
+    if (question.type === "true_false") {
+      var statements = {};
+      global.document.querySelectorAll("[data-statement-id]:checked").forEach(function collect(input) {
+        statements[input.getAttribute("data-statement-id")] = input.value;
+      });
+      return statements;
+    }
+    if (question.type === "categorization") {
+      var categories = {};
+      global.document.querySelectorAll("[data-category-item]").forEach(function collect(select) {
+        categories[select.getAttribute("data-category-item")] = select.value;
+      });
+      return categories;
+    }
+    if (question.type === "short_answer") {
+      return byId("shortAnswerInput") ? byId("shortAnswerInput").value : "";
+    }
+    return null;
   }
 
   function startTimerForQuestion(game, question) {
@@ -767,16 +1250,26 @@
       return;
     }
     answerLocked = true;
+    lockCurrentQuestionUi();
 
     var game = Storage.loadCurrentGame();
     if (!game || game.status !== "playing") {
+      answerLocked = false;
+      return;
+    }
+    if ((game.phase !== "question" && game.phase !== "practice") || game.answerSubmitted) {
       return;
     }
 
     var question = getQuestionById(game.currentQuestionId);
     if (!question) {
+      answerLocked = false;
       return;
     }
+
+    game.answerSubmitted = true;
+    game.updatedAt = nowIso();
+    Storage.saveCurrentGame(game);
 
     var elapsedMs = stopTimerAndGetElapsed();
     var result = options && Object.prototype.hasOwnProperty.call(options, "forceCorrect")
@@ -863,6 +1356,7 @@
   }
 
   function formatSubmittedAnswer(question, answer, options) {
+    options = options || {};
     if (options.reason === "timeout") {
       return "Время истекло";
     }
@@ -877,6 +1371,47 @@
         return item && String(item.id) === String(answer);
       })[0];
       return option ? option.id + ": " + (option.text || option.label || option.id) : String(answer || "");
+    }
+    if (question.type === "multiple_choice") {
+      return asArray(answer).map(function formatOption(optionId) {
+        return optionId + ": " + getOptionText(question, optionId);
+      }).join("; ") || "нет ответа";
+    }
+    if (question.type === "matching") {
+      return Object.keys(answer || {}).map(function formatPair(left) {
+        return left + " → " + (answer[left] || "не выбрано");
+      }).join("; ") || "нет ответа";
+    }
+    if (question.type === "fill_blank") {
+      return asArray(question.blanks).map(function formatBlank(blank, index) {
+        var key = blank && blank.id ? blank.id : String(index);
+        return (blank && blank.id ? blank.id : "Пропуск " + String(index + 1)) + ": " + ((answer && answer[key]) || "пусто");
+      }).join("; ");
+    }
+    if (question.type === "ordering") {
+      return asArray(answer).map(function formatItem(itemId) {
+        return getItemText(question, itemId);
+      }).join(" → ") || "нет ответа";
+    }
+    if (question.type === "true_false") {
+      return asArray(question.statements).map(function formatStatement(statement) {
+        var value = answer && answer[statement.id];
+        return statement.text + " — " + (value === "true" || value === true ? "richtig" : (value === "false" || value === false ? "falsch" : "не выбрано"));
+      }).join("; ");
+    }
+    if (question.type === "categorization") {
+      var grouped = {};
+      Object.keys(answer || {}).forEach(function groupItem(itemId) {
+        var categoryId = answer[itemId] || "не выбрано";
+        if (!grouped[categoryId]) {
+          grouped[categoryId] = [];
+        }
+        grouped[categoryId].push(getItemText(question, itemId));
+      });
+      return Object.keys(grouped).map(function formatGroup(categoryId) {
+        var label = categoryId === "не выбрано" ? categoryId : getCategoryLabelById(question, categoryId);
+        return label + ": " + grouped[categoryId].join(", ");
+      }).join("; ") || "нет ответа";
     }
     return String(answer || "");
   }
@@ -1132,6 +1667,7 @@
 
     game.phase = "question";
     game.currentQuestionId = null;
+    game.answerSubmitted = false;
     game.currentQuestionStartedAt = null;
     game.currentQuestionOvertime = false;
     game.lastFeedback = null;
@@ -1154,6 +1690,8 @@
 
     game.phase = "practice";
     game.currentQuestionId = practice.id;
+    game.answerSubmitted = false;
+    game.currentQuestionStartedAt = nowIso();
     game.currentQuestionOvertime = false;
     game.lastFeedback = null;
     game.updatedAt = nowIso();
@@ -1237,13 +1775,33 @@
 
   function renderDictionary() {
     setHeader("Словарь", "Термины из банка данных");
-    var terms = Array.isArray(DATA.terms) ? DATA.terms : [];
+    var allTerms = Array.isArray(DATA.terms) ? DATA.terms : [];
+    var filterMap = {};
+    asArray(dictionaryTermFilterIds).forEach(function mark(termId) {
+      filterMap[String(termId)] = true;
+    });
+    var hasFilter = Object.keys(filterMap).length > 0;
+    var terms = hasFilter
+      ? allTerms.filter(function filterTerm(term) {
+        return term && filterMap[String(term.id)];
+      })
+      : allTerms;
     app.innerHTML = '' +
       '<section class="panel list-panel">' +
-        '<div class="screen-head"><div><h1>Словарь терминов</h1><p>Сейчас показаны реальные карточки из `CHEMIE_DATA.terms`; поиск и фильтры будут отдельным шагом.</p></div><button class="soft-btn" type="button" data-local-route="start">На старт</button></div>' +
+        '<div class="screen-head"><div><h1>Словарь терминов</h1><p>' + esc(hasFilter ? "Показаны термины, связанные с текущим вопросом." : "Сейчас показаны реальные карточки из CHEMIE_DATA.terms; поиск и фильтры будут отдельным шагом.") + '</p></div><div class="action-row">' +
+          (hasFilter ? '<button class="soft-btn" type="button" id="showAllTerms">Все термины</button>' : "") +
+          '<button class="soft-btn" type="button" data-local-route="start">На старт</button>' +
+        '</div></div>' +
         (terms.length ? '<div class="card-grid">' + terms.map(renderTerm).join("") + '</div>' : '<div class="empty-state"><h2>Термины пока не добавлены</h2><p>Структура `CHEMIE_DATA.terms` готова для следующей сессии.</p></div>') +
       '</section>';
     wireLocalRouteButtons();
+    var showAll = byId("showAllTerms");
+    if (showAll) {
+      showAll.addEventListener("click", function clearTermFilter() {
+        dictionaryTermFilterIds = null;
+        renderDictionary();
+      });
+    }
   }
 
   function renderTerm(term) {
@@ -1338,7 +1896,11 @@
   function wireLocalRouteButtons() {
     global.document.querySelectorAll("[data-local-route]").forEach(function wire(button) {
       button.addEventListener("click", function go() {
-        setRoute(button.getAttribute("data-local-route"));
+        var route = button.getAttribute("data-local-route");
+        if (route === "dictionary") {
+          dictionaryTermFilterIds = null;
+        }
+        setRoute(route);
       });
     });
   }
@@ -1388,6 +1950,9 @@
         return;
       }
       event.preventDefault();
+      if (routeButton.getAttribute("data-route") === "dictionary") {
+        dictionaryTermFilterIds = null;
+      }
       setRoute(routeButton.getAttribute("data-route"));
     });
 
