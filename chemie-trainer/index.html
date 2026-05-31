@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chemie-Eroberung</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/map.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="brand-button" type="button" data-route="start" aria-label="На стартовый экран">
+      <span class="brand-mark" aria-hidden="true">CE</span>
+      <span>
+        <strong>Chemie-Eroberung</strong>
+        <small>Klasse 8 · Luft · Wasser</small>
+      </span>
+    </button>
+    <nav class="topnav" aria-label="Основная навигация">
+      <button type="button" data-route="start">Старт</button>
+      <button type="button" data-route="game">Игра</button>
+      <button type="button" data-route="dictionary">Словарь</button>
+      <button type="button" data-route="answers">Готовые ответы</button>
+      <button type="button" data-route="progress">Прогресс</button>
+    </nav>
+    <div class="route-caption" aria-live="polite">
+      <strong id="route-title">Старт</strong>
+      <span id="route-subtitle">Настрой тренажер</span>
+    </div>
+  </header>
+
+  <div id="app-status" class="notice" hidden></div>
+  <main id="app" tabindex="-1"></main>
+
+  <script src="js/data.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/chemistry-engine.js"></script>
+  <script src="js/map-generator.js"></script>
+  <script src="js/map-renderer.js"></script>
+  <script src="js/timer.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

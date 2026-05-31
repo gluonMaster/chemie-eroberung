@@ -1,0 +1,14 @@
+# Excluded source/reference folders for this project snapshot
+game/
+geografie/
+Prompts/
+gpt_pro_tz_review_context/
+
+# Local browser/test artifacts
+.playwright-mcp/
+*.png
+
+# Local server/runtime noise
+server.log
+server.err.log
+*.log
