@@ -1145,8 +1145,8 @@
       subtopic: "Verbrennung",
       type: "categorization",
       title: "Nichtmetalloxide erkennen",
-      questionRu: "Раздели вещества на Nichtmetalloxide и «не Nichtmetalloxide».",
-      questionDe: "Ordne die Stoffe zu: Nichtmetalloxid oder kein Nichtmetalloxid?",
+      questionRu: "Выбери, какие вещества являются оксидами неметаллов, а какие нет.",
+      questionDe: "Welche Stoffe sind Nichtmetalloxide?",
       instructionRu: "Разложи каждую запись в правильную категорию.",
       hint: "Оксид содержит кислород и другой элемент; здесь нужен оксид неметалла.",
       explanationRu: "CO₂ и SO₂ — оксиды неметаллов. O₂ и N₂ являются молекулами элементов, а NaCl не является оксидом.",
@@ -1158,7 +1158,7 @@
       source: luftSource("L14"),
       categories: [
         { id: "nichtmetalloxid", label: "Nichtmetalloxide" },
-        { id: "kein_nichtmetalloxid", label: "Keine Nichtmetalloxide" }
+        { id: "kein_nichtmetalloxid", label: "Andere Stoffe" }
       ],
       items: [
         { id: "co2", text: "CO₂", correctCategoryId: "nichtmetalloxid" },
@@ -1169,7 +1169,7 @@
       ],
       correctClassification: {
         Nichtmetalloxide: ["CO₂", "SO₂"],
-        KeineNichtmetalloxide: ["O₂", "N₂", "NaCl"]
+        AndereStoffe: ["O₂", "N₂", "NaCl"]
       }
     },
     {

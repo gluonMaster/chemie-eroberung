@@ -47,6 +47,19 @@ button {
   cursor: pointer;
 }
 
+button,
+.segment span,
+.check-row span,
+.meta-chips span,
+.term-chips span,
+.category-chip,
+.order-chip,
+.order-answer-chip,
+.term-link {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 button:disabled,
 input:disabled,
 select:disabled,
@@ -335,7 +348,7 @@ legend {
 
 .grid-3 {
   display: grid;
-  grid-template-columns: minmax(160px, .8fr) minmax(160px, .7fr) minmax(220px, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
   gap: 12px;
 }
 

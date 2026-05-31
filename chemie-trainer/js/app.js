@@ -392,15 +392,15 @@
           renderStorageNotices(savedGame) +
           '<fieldset><legend>Режим</legend><div class="segmented">' + modeOptions + '</div></fieldset>' +
           '<fieldset class="grid-2"><legend>Карта</legend>' +
-            '<label class="field"><span>totalHexes</span><input id="totalHexes" type="number" min="12" max="36" step="1" value="' + settings.totalHexes + '"></label>' +
-            '<label class="field"><span>playerStartHexes</span><input id="playerStartHexes" type="number" min="3" max="' + Math.min(8, settings.totalHexes - 3) + '" step="1" value="' + settings.playerStartHexes + '"></label>' +
+            '<label class="field"><span>Гексов на карте</span><input id="totalHexes" type="number" min="12" max="36" step="1" value="' + settings.totalHexes + '"></label>' +
+            '<label class="field"><span>Старт ученика</span><input id="playerStartHexes" type="number" min="3" max="' + Math.min(8, settings.totalHexes - 3) + '" step="1" value="' + settings.playerStartHexes + '"></label>' +
           '</fieldset>' +
           '<fieldset class="grid-3"><legend>Таймер</legend>' +
-            '<label class="check-row switch-row"><input id="timerEnabled" type="checkbox"' + (settings.timerEnabled ? " checked" : "") + '> <span>timerEnabled</span></label>' +
-            '<label class="field"><span>timerMode</span><select id="timerMode"><option value="soft">soft</option><option value="hard">hard</option></select></label>' +
-            '<label class="check-row switch-row"><input id="hardTimerForShortAnswer" type="checkbox"' + (settings.hardTimerForShortAnswer ? " checked" : "") + '> <span>hardTimerForShortAnswer</span></label>' +
+            '<label class="check-row switch-row"><input id="timerEnabled" type="checkbox"' + (settings.timerEnabled ? " checked" : "") + '> <span>Включить таймер</span></label>' +
+            '<label class="field"><span>Режим таймера</span><select id="timerMode"><option value="soft">soft</option><option value="hard">hard</option></select></label>' +
+            '<label class="check-row switch-row"><input id="hardTimerForShortAnswer" type="checkbox"' + (settings.hardTimerForShortAnswer ? " checked" : "") + '> <span>Строгий короткий ответ</span></label>' +
           '</fieldset>' +
-          '<details class="advanced"><summary>Erweiterte Einstellungen</summary><div class="type-grid">' + typeCheckboxes() + '</div></details>' +
+          '<details class="advanced"><summary>Типы заданий</summary><div class="type-grid">' + typeCheckboxes() + '</div></details>' +
           '<div id="normalizationNotice" class="notice notice-warn" hidden></div>' +
           '<div class="action-row">' +
             '<button class="primary-btn" type="button" id="startGame">Начать игру</button>' +
@@ -937,7 +937,7 @@
   function renderShortAnswerUi(question) {
     return '' +
       '<form id="answerForm" class="answer-form" data-answer-type="short_answer">' +
-        '<label class="field"><span>Короткий ответ по-немецки</span><textarea id="shortAnswerInput" rows="5" placeholder="Schreibe deine Antwort..."></textarea></label>' +
+        '<label class="field"><span>Короткий ответ по-немецки</span><textarea id="shortAnswerInput" rows="5" lang="de-DE" spellcheck="true" placeholder="Schreibe deine Antwort..."></textarea></label>' +
         '<div class="notice notice-info">Сначала напиши немецкий ответ, потом сравни его с образцом и честно реши, засчитывать ли попытку.</div>' +
         renderSubmitRow("", "Сравнить с образцом") +
         '<div id="shortAnswerCheckResult" class="short-answer-review-slot" aria-live="polite"></div>' +

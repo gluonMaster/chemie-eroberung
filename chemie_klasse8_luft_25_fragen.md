@@ -262,8 +262,8 @@ SO₂
 ## L14 — Nichtmetalloxide erkennen
 
 **Тип:** `categorization`  
-**Вопрос RU:** Раздели вещества на `Nichtmetalloxide` и «не Nichtmetalloxide».  
-**Frage DE:** Ordne die Stoffe zu: Nichtmetalloxid oder kein Nichtmetalloxid?
+**Вопрос RU:** Выбери, какие вещества являются оксидами неметаллов, а какие нет.  
+**Frage DE:** Welche Stoffe sind Nichtmetalloxide?
 
 **Элементы:**
 - CO₂
@@ -274,7 +274,7 @@ SO₂
 
 **Правильная классификация:**
 - **Nichtmetalloxide:** CO₂, SO₂
-- **Keine Nichtmetalloxide:** O₂, N₂, NaCl
+- **Andere Stoffe:** O₂, N₂, NaCl
 
 **Подсказка:** Оксид содержит кислород и другой элемент; здесь нужен оксид неметалла.  
 **Учебная цель:** Узнавать оксиды неметаллов.
