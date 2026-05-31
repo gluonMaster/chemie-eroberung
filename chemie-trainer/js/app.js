@@ -17,6 +17,8 @@
   var answerLocked = false;
   var dictionaryTermFilterIds = null;
   var loggedExplanationFallbacks = {};
+  var EMPTY_SHORT_ANSWER_TEXT = "Ответ пустой. Сначала напиши 1–3 предложения или выбери “не засчитывать”.";
+  var SHORT_ANSWER_WARNING_TEXT = "Автоматическая проверка не нашла нужные Fachbegriffe. Ты уверен, что честно оцениваешь качество своего ответа?";
 
   var TYPE_LABELS = {
     single_choice: "Выбор ответа",
@@ -546,6 +548,7 @@
       maxTurns: queueState.maxTurns,
       correct: 0,
       incorrect: 0,
+      consecutiveIncorrect: 0,
       overtime: 0,
       lastFeedback: null,
       result: null
@@ -703,10 +706,20 @@
       : "";
   }
 
-  function renderRelatedTermsButton(question, id) {
+  function renderRelatedTermsButton(question, id, options) {
+    options = options || {};
+    var label = options.label || "Открыть термины";
+    var className = options.prominent ? "primary-btn terms-prominent" : "soft-btn";
     return asArray(question && question.relatedTerms).length
-      ? '<button class="soft-btn" type="button" id="' + esc(id) + '">Открыть термины</button>'
+      ? '<button class="' + esc(className) + '" type="button" id="' + esc(id) + '">' + esc(label) + '</button>'
       : "";
+  }
+
+  function timerWarningText(game, question) {
+    if (question && question.type === "short_answer" && game && game.settings && game.settings.timerMode === "hard" && !game.settings.hardTimerForShortAnswer) {
+      return "Время вышло. Для short_answer строгий таймер отключен, поэтому можно сравнить ответ с образцом и принять решение.";
+    }
+    return "Время вышло. В soft-режиме можно ответить дальше, ответ будет отмечен как overtime.";
   }
 
   function renderQuestion(game, question) {
@@ -719,7 +732,7 @@
       ? '<div class="notice notice-info">Вопрос восстановлен после перезагрузки. Таймер начался заново.</div>'
       : "";
     var timerWarning = game.currentQuestionOvertime
-      ? '<div class="notice notice-warn" id="timer-warning">Время вышло. В soft-режиме можно ответить дальше, ответ будет отмечен как overtime.</div>'
+      ? '<div class="notice notice-warn" id="timer-warning">' + esc(timerWarningText(game, question)) + '</div>'
       : '<div class="notice notice-warn" id="timer-warning" hidden></div>';
 
     return '' +
@@ -781,9 +794,9 @@
     return '<div class="notice notice-warn">Для типа `' + esc(question.type) + '` пока нет рендера.</div>';
   }
 
-  function renderSubmitRow(extraButton) {
+  function renderSubmitRow(extraButton, submitLabel) {
     return '<div class="action-row answer-actions">' +
-      '<button class="primary-btn" type="submit" id="submitAnswer">Проверить</button>' +
+      '<button class="primary-btn" type="submit" id="submitAnswer">' + esc(submitLabel || "Проверить") + '</button>' +
       (extraButton || "") +
     '</div>';
   }
@@ -922,10 +935,120 @@
   function renderShortAnswerUi(question) {
     return '' +
       '<form id="answerForm" class="answer-form" data-answer-type="short_answer">' +
-        '<label class="field"><span>Короткий ответ по-немецки</span><textarea id="shortAnswerInput" rows="5" required placeholder="Schreibe deine Antwort..."></textarea></label>' +
-        '<div class="notice notice-info">Короткий ответ проверяется по обязательным Fachbegriffe. Подробная самооценка будет расширена отдельным шагом.</div>' +
-        renderSubmitRow("") +
+        '<label class="field"><span>Короткий ответ по-немецки</span><textarea id="shortAnswerInput" rows="5" placeholder="Schreibe deine Antwort..."></textarea></label>' +
+        '<div class="notice notice-info">Сначала напиши немецкий ответ, потом сравни его с образцом и честно реши, засчитывать ли попытку.</div>' +
+        renderSubmitRow("", "Сравнить с образцом") +
+        '<div id="shortAnswerCheckResult" class="short-answer-review-slot" aria-live="polite"></div>' +
       '</form>';
+  }
+
+  function getShortAnswerInputValue() {
+    var input = byId("shortAnswerInput");
+    return input ? input.value : "";
+  }
+
+  function formatShortAnswerGroup(group) {
+    var label = group && group.id ? group.id + ": " : "";
+    var terms = asArray(group && group.accepted);
+    return label + (terms.length ? terms.join(" / ") : "нет списка терминов");
+  }
+
+  function renderShortAnswerGroupList(groups, emptyText, found) {
+    var list = asArray(groups);
+    if (list.length === 0) {
+      return '<p class="muted">' + esc(emptyText) + '</p>';
+    }
+    return '<div class="short-answer-term-grid">' + list.map(function renderGroup(group) {
+      var main = found && asArray(group.foundTerms).length
+        ? asArray(group.foundTerms).join(" / ")
+        : formatShortAnswerGroup(group);
+      var detail = found
+        ? "Группа: " + formatShortAnswerGroup(group)
+        : "Можно использовать один из вариантов группы.";
+      return '<article class="short-answer-term-card">' +
+        '<strong>' + esc(main) + '</strong>' +
+        '<span>' + esc(detail) + '</span>' +
+      '</article>';
+    }).join("") + '</div>';
+  }
+
+  function renderShortAnswerComparison(question, answer) {
+    var analysis = Engine.analyzeShortAnswer(question, answer);
+    var criteria = asArray(question.criteria);
+    var warning = !analysis.empty && !analysis.passesTermThreshold
+      ? '<div class="notice notice-warn short-answer-warning">' + esc(SHORT_ANSWER_WARNING_TEXT) + '</div>'
+      : "";
+    var emptyWarning = analysis.empty
+      ? '<div class="notice notice-warn short-answer-empty-guard">' + esc(EMPTY_SHORT_ANSWER_TEXT) + '</div>'
+      : '<div class="notice notice-warn short-answer-empty-guard" hidden></div>';
+
+    return '' +
+      '<section class="short-answer-review">' +
+        '<h3>Сравнение с образцом</h3>' +
+        emptyWarning +
+        warning +
+        '<div class="sample-answer"><h4>Sample answer</h4><p lang="de">' + esc(question.sampleAnswer || "") + '</p></div>' +
+        '<div class="sample-answer"><h4>Criteria</h4>' +
+          (criteria.length ? '<ul>' + criteria.map(function item(text) {
+            return '<li>' + esc(text) + '</li>';
+          }).join("") + '</ul>' : '<p class="muted">Критерии не указаны.</p>') +
+        '</div>' +
+        '<div class="short-answer-columns">' +
+          '<section><h4>Найденные Fachbegriffe (' + esc(analysis.foundCount) + '/' + esc(analysis.requiredCount) + ')</h4>' +
+            renderShortAnswerGroupList(analysis.foundGroups, "Пока не найдено ни одной обязательной группы.", true) +
+          '</section>' +
+          '<section><h4>Ненайденные Fachbegriffe</h4>' +
+            renderShortAnswerGroupList(analysis.missingGroups, "Все обязательные группы найдены.", false) +
+          '</section>' +
+        '</div>' +
+        '<div class="action-row">' +
+          '<button class="primary-btn" type="button" id="acceptShortAnswer">Да, засчитать</button>' +
+          '<button class="danger-btn" type="button" id="rejectShortAnswer">Нет, не засчитывать</button>' +
+        '</div>' +
+      '</section>';
+  }
+
+  function showShortAnswerEmptyGuard() {
+    var guard = global.document.querySelector(".short-answer-empty-guard");
+    if (guard) {
+      guard.hidden = false;
+      guard.textContent = EMPTY_SHORT_ANSWER_TEXT;
+    }
+    var input = byId("shortAnswerInput");
+    if (input && typeof input.focus === "function") {
+      input.focus();
+    }
+  }
+
+  function submitShortAnswerDecision(question, accepted) {
+    var answer = getShortAnswerInputValue();
+    var analysis = Engine.analyzeShortAnswer(question, answer);
+    if (accepted && analysis.empty) {
+      showShortAnswerEmptyGuard();
+      return;
+    }
+
+    handleAnswer(answer, {
+      forceCorrect: Boolean(accepted),
+      reason: accepted ? "self_accepted" : "self_rejected",
+      selfAssessment: true,
+      selfOverride: Boolean(accepted && !analysis.passesTermThreshold),
+      shortAnswerAnalysis: analysis
+    });
+  }
+
+  function updateShortAnswerComparison(question) {
+    var target = byId("shortAnswerCheckResult");
+    if (!target) {
+      return;
+    }
+    target.innerHTML = renderShortAnswerComparison(question, getShortAnswerInputValue());
+    byId("acceptShortAnswer").addEventListener("click", function acceptAnswer() {
+      submitShortAnswerDecision(question, true);
+    });
+    byId("rejectShortAnswer").addEventListener("click", function rejectAnswer() {
+      submitShortAnswerDecision(question, false);
+    });
   }
 
   function warnExplanationFallback(question) {
@@ -974,19 +1097,43 @@
       : "";
   }
 
+  function renderShortAnswerFeedbackDetails(feedback) {
+    var analysis = feedback && feedback.shortAnswerAnalysis;
+    if (!analysis) {
+      return "";
+    }
+    return '' +
+      '<div class="short-answer-feedback">' +
+        '<h3>Самопроверка Fachbegriffe</h3>' +
+        (feedback.selfOverride ? '<div class="notice notice-warn">Ответ засчитан учеником, хотя автопроверка нашла меньше терминов, чем ожидалось.</div>' : "") +
+        '<div class="short-answer-columns">' +
+          '<section><h4>Найдено (' + esc(analysis.foundCount) + '/' + esc(analysis.requiredCount) + ')</h4>' +
+            renderShortAnswerGroupList(analysis.foundGroups, "Не найдено обязательных групп.", true) +
+          '</section>' +
+          '<section><h4>Стоит повторить</h4>' +
+            renderShortAnswerGroupList(analysis.missingGroups, "Все обязательные группы найдены.", false) +
+          '</section>' +
+        '</div>' +
+      '</div>';
+  }
+
   function renderFeedback(game, question) {
     var feedback = game.lastFeedback || {};
     var correct = Boolean(feedback.correct);
     var kind = correct ? "notice-ok" : "notice-warn";
     var title = correct
-      ? (feedback.practice ? "Учебная попытка засчитана" : "Правильно")
-      : (feedback.reason === "timeout" ? "Время вышло" : "Разбор ошибки");
+      ? (feedback.reason === "self_accepted" ? "Самооценка засчитана" : (feedback.practice ? "Учебная попытка засчитана" : "Правильно"))
+      : (feedback.reason === "timeout" ? "Время вышло" : (feedback.reason === "self_rejected" ? "Ответ не засчитан" : "Разбор ошибки"));
     var related = asArray(question && question.relatedTerms);
+    var mistakeStreak = Math.max(0, Math.round(Number(feedback.consecutiveIncorrect) || 0));
+    var prominentTerms = !correct && mistakeStreak >= 2;
+    var practiceLabel = mistakeStreak >= 3 ? "Учебный раунд без потери территории" : "Потренировать похожий";
     warnExplanationFallback(question);
 
     return '' +
       '<p class="eyebrow">' + esc(question ? question.id : "") + ' · ' + esc(feedback.practice ? "Учебный режим" : "Итог хода") + '</p>' +
       '<div class="notice ' + kind + '"><strong>' + esc(title) + '</strong><p>' + esc(feedback.summary || "") + '</p></div>' +
+      (!correct && mistakeStreak >= 3 ? '<div class="notice notice-info">Три ошибки подряд: можно сделать учебный раунд без потери территории.</div>' : "") +
       '<h2 lang="de">' + esc(question ? question.questionDe : "") + '</h2>' +
       '<dl class="feedback-list">' +
         '<dt>Ответ ученика</dt><dd>' + esc(feedback.submittedAnswer || "нет ответа") + '</dd>' +
@@ -995,10 +1142,14 @@
         '<dt>Kurz auf Deutsch</dt><dd>' + esc(feedbackExplanationDe(question)) + '</dd>' +
         '<dt>Цель</dt><dd>' + esc((question && question.learningGoal) || "Закрепить правильный ответ и связанные термины.") + '</dd>' +
       '</dl>' +
+      renderShortAnswerFeedbackDetails(feedback) +
       renderTermChips(related) +
       '<div class="action-row">' +
-        renderRelatedTermsButton(question, "openFeedbackTerms") +
-        (!correct && !feedback.practice ? '<button class="soft-btn" type="button" id="practiceSimilar">Потренировать похожий</button>' : "") +
+        renderRelatedTermsButton(question, "openFeedbackTerms", {
+          prominent: prominentTerms,
+          label: prominentTerms ? "Открыть связанные термины" : "Открыть термины"
+        }) +
+        (!correct && !feedback.practice ? '<button class="soft-btn" type="button" id="practiceSimilar">' + esc(practiceLabel) + '</button>' : "") +
         '<button class="primary-btn" type="button" id="continueGame">' + esc(feedback.practice ? "Продолжить партию" : "Продолжить") + '</button>' +
       '</div>';
   }
@@ -1037,6 +1188,10 @@
     if (answerForm) {
       answerForm.addEventListener("submit", function submitForm(event) {
         event.preventDefault();
+        if (question.type === "short_answer") {
+          updateShortAnswerComparison(question);
+          return;
+        }
         if (typeof answerForm.reportValidity === "function" && !answerForm.reportValidity()) {
           return;
         }
@@ -1233,7 +1388,7 @@
       var warning = byId("timer-warning");
       if (warning) {
         warning.hidden = false;
-        warning.textContent = "Время вышло. В soft-режиме можно ответить дальше, ответ будет отмечен как overtime.";
+        warning.textContent = timerWarningText(current, question);
       }
     });
   }
@@ -1246,6 +1401,7 @@
   }
 
   function handleAnswer(answer, options) {
+    options = options || {};
     if (answerLocked) {
       return;
     }
@@ -1272,16 +1428,21 @@
     Storage.saveCurrentGame(game);
 
     var elapsedMs = stopTimerAndGetElapsed();
-    var result = options && Object.prototype.hasOwnProperty.call(options, "forceCorrect")
-      ? { correct: Boolean(options.forceCorrect), needsSelfCheck: false, isFinal: true, details: null }
+    var result = Object.prototype.hasOwnProperty.call(options, "forceCorrect")
+      ? {
+        correct: Boolean(options.forceCorrect),
+        needsSelfCheck: question.type === "short_answer",
+        isFinal: true,
+        details: options.shortAnswerAnalysis || null
+      }
       : Engine.checkAnswer(question, answer);
 
     if (game.phase === "practice") {
-      applyPracticeAnswer(game, question, answer, result, options || {});
+      applyPracticeAnswer(game, question, answer, result, options);
       return;
     }
 
-    applyMainAnswer(game, question, answer, result, options || {}, elapsedMs);
+    applyMainAnswer(game, question, answer, result, options, elapsedMs);
   }
 
   function applyPracticeAnswer(game, question, answer, result, options) {
@@ -1299,9 +1460,13 @@
     game.turns = Math.max(0, Math.round(Number(game.turns) || 0)) + 1;
     game.correct = Math.max(0, Math.round(Number(game.correct) || 0)) + (correct ? 1 : 0);
     game.incorrect = Math.max(0, Math.round(Number(game.incorrect) || 0)) + (correct ? 0 : 1);
+    game.consecutiveIncorrect = correct
+      ? 0
+      : Math.max(0, Math.round(Number(game.consecutiveIncorrect) || 0)) + 1;
     if (game.currentQuestionOvertime) {
       game.overtime = Math.max(0, Math.round(Number(game.overtime) || 0)) + 1;
     }
+    options.consecutiveIncorrect = game.consecutiveIncorrect;
 
     updateProgressAfterAnswer(question, correct, game, options, elapsedMs);
 
@@ -1325,6 +1490,14 @@
       summary = correct
         ? "Повторная попытка не меняет карту."
         : "Карта не меняется: это учебная попытка.";
+    } else if (reason === "self_accepted") {
+      summary = options.selfOverride
+        ? "Ответ засчитан по самооценке. Автопроверка отметила недостающие Fachbegriffe, но решение ученика принято."
+        : (mapDelta && mapDelta.regionId != null ? "Ответ засчитан по самооценке, захвачен гекс системы #" + mapDelta.regionId + "." : "Ответ засчитан по самооценке.");
+    } else if (reason === "self_rejected") {
+      summary = mapDelta && mapDelta.regionId != null
+        ? "Потеряли территорию, но нашли тему для тренировки: гекс #" + mapDelta.regionId + "."
+        : "Ответ не засчитан, тема добавлена в тренировку.";
     } else if (correct) {
       summary = mapDelta && mapDelta.regionId != null
         ? "Захвачен гекс системы #" + mapDelta.regionId + "."
@@ -1351,7 +1524,11 @@
       submittedAnswer: formatSubmittedAnswer(question, answer, options),
       correctAnswer: Engine.formatCorrectAnswer(question),
       summary: summary,
-      mapDelta: mapDelta || null
+      mapDelta: mapDelta || null,
+      selfAssessment: Boolean(options.selfAssessment),
+      selfOverride: Boolean(options.selfOverride),
+      shortAnswerAnalysis: options.shortAnswerAnalysis || result.details || null,
+      consecutiveIncorrect: Math.max(0, Math.round(Number(options.consecutiveIncorrect) || 0))
     };
   }
 
@@ -1412,6 +1589,9 @@
         var label = categoryId === "не выбрано" ? categoryId : getCategoryLabelById(question, categoryId);
         return label + ": " + grouped[categoryId].join(", ");
       }).join("; ") || "нет ответа";
+    }
+    if (question.type === "short_answer") {
+      return String(answer || "").trim() || "нет ответа";
     }
     return String(answer || "");
   }
@@ -1483,7 +1663,7 @@
     });
 
     if (playerRegions.length === 0) {
-      finishGame(game, "defeat", "У ученика не осталось территорий.");
+      finishGame(game, "defeat", "Тренировка завершена. Эти темы стоит повторить.");
       return null;
     }
     if (playerRegions.length === 1) {
@@ -1555,31 +1735,38 @@
       return;
     }
     if (mapDelta && mapDelta.type === "loss" && playerCount <= 0) {
-      finishGame(game, "defeat", "У ученика не осталось территорий.");
+      finishGame(game, "defeat", "Тренировка завершена. Эти темы стоит повторить.");
     }
   }
 
   function updateProgressAfterAnswer(question, correct, game, options, elapsedMs) {
+    options = options || {};
     var next = Storage.loadProgress();
     var perQuestion = next.perQuestion || {};
     var id = question.id;
+    var selfOverride = Boolean(options.selfOverride);
     var item = perQuestion[id] || {
       seen: 0,
       correct: 0,
       incorrect: 0,
       lastResult: "",
       lastSeenAt: "",
-      selfOverrideCount: 0
+      selfOverrideCount: 0,
+      lastSelfOverride: false
     };
-    var resultLabel = correct
-      ? (game.currentQuestionOvertime ? "correct_overtime" : "correct")
-      : (options.reason === "timeout" ? "timeout" : (options.reason === "revealed" ? "revealed" : "incorrect"));
+    var resultLabel = selfOverride
+      ? "self_override"
+      : (correct
+        ? (options.reason === "self_accepted" ? "self_accepted" : (game.currentQuestionOvertime ? "correct_overtime" : "correct"))
+        : (options.reason === "timeout" ? "timeout" : (options.reason === "revealed" ? "revealed" : (options.reason === "self_rejected" ? "self_rejected" : "incorrect"))));
 
     item.seen += 1;
     item.correct += correct ? 1 : 0;
     item.incorrect += correct ? 0 : 1;
     item.lastResult = resultLabel;
     item.lastSeenAt = nowIso();
+    item.lastSelfOverride = selfOverride;
+    item.selfOverrideCount = Math.max(0, Math.round(Number(item.selfOverrideCount) || 0)) + (selfOverride ? 1 : 0);
     perQuestion[id] = item;
 
     next.perQuestion = perQuestion;
@@ -1588,6 +1775,7 @@
     next.correct = Math.max(0, Math.round(Number(next.correct) || 0)) + (correct ? 1 : 0);
     next.incorrect = Math.max(0, Math.round(Number(next.incorrect) || 0)) + (correct ? 0 : 1);
     next.totalAnswerMs = Math.max(0, Math.round(Number(next.totalAnswerMs) || 0)) + Math.max(0, Math.round(Number(elapsedMs) || 0));
+    next.selfOverrideCount = Math.max(0, Math.round(Number(next.selfOverrideCount) || 0)) + (selfOverride ? 1 : 0);
 
     if (!next.topicStats) {
       next.topicStats = { luft: { seen: 0, correct: 0, incorrect: 0 }, wasser: { seen: 0, correct: 0, incorrect: 0 } };
@@ -1747,16 +1935,16 @@
           '<p class="eyebrow">' + esc(result.type || "") + '</p>' +
           '<h1>' + esc(RESULT_LABELS[result.type] || "Итог") + '</h1>' +
           '<p>' + esc(result.message || "") + '</p>' +
-          '<div class="metric-grid compact-metrics">' +
-            '<div class="metric"><strong>' + esc(result.playerHexes || 0) + '</strong><span>гексов ученика</span></div>' +
-            '<div class="metric"><strong>' + percent(result.correct || 0, (result.correct || 0) + (result.incorrect || 0)) + '</strong><span>точность партии</span></div>' +
-            '<div class="metric"><strong>' + esc(result.turns || 0) + '</strong><span>ходов</span></div>' +
-          '</div>' +
           '<h2>Что повторить</h2>' +
           (weakList.length ? '<ul class="weak-list">' + weakList.map(function renderWeak(name) {
             var item = weak[name];
             return '<li><strong>' + esc(name) + '</strong> - ' + esc(item.incorrect || 0) + ' ошибок, вопросы: ' + esc(asArray(item.questionIds).slice(0, 5).join(", ")) + '</li>';
           }).join("") + '</ul>' : '<p class="muted">Слабые подтемы пока не накоплены.</p>') +
+          '<div class="metric-grid compact-metrics">' +
+            '<div class="metric"><strong>' + esc(result.playerHexes || 0) + '</strong><span>гексов ученика</span></div>' +
+            '<div class="metric"><strong>' + percent(result.correct || 0, (result.correct || 0) + (result.incorrect || 0)) + '</strong><span>точность партии</span></div>' +
+            '<div class="metric"><strong>' + esc(result.turns || 0) + '</strong><span>ходов</span></div>' +
+          '</div>' +
           '<div class="action-row"><button class="primary-btn" type="button" id="newGameAfterResult">Начать новую игру</button><button class="soft-btn" type="button" data-local-route="progress">Обзор прогресса</button><button class="danger-btn" type="button" id="clearFinishedGame">Убрать итог</button></div>' +
         '</aside>' +
       '</section>';
@@ -1842,6 +2030,7 @@
           '<div class="metric"><strong>' + percent(luft.correct, luft.seen) + '</strong><span>Luft</span></div>' +
           '<div class="metric"><strong>' + percent(wasser.correct, wasser.seen) + '</strong><span>Wasser</span></div>' +
           '<div class="metric"><strong>' + progress.mistakeIds.length + '</strong><span>ошибок для повтора</span></div>' +
+          '<div class="metric"><strong>' + esc(progress.selfOverrideCount || 0) + '</strong><span>самооценок вопреки автопроверке</span></div>' +
         '</div>' +
         '<div class="progress-columns">' +
           '<section><h2>Слабые подтемы</h2>' +

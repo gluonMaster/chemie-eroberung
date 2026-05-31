@@ -753,6 +753,70 @@ textarea {
   color: var(--text);
 }
 
+.short-answer-review-slot:empty {
+  display: none;
+}
+
+.short-answer-review,
+.short-answer-feedback {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.short-answer-review h3,
+.short-answer-feedback h3,
+.short-answer-review h4,
+.short-answer-feedback h4 {
+  margin: 0;
+}
+
+.sample-answer {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.sample-answer p,
+.sample-answer ul {
+  margin-bottom: 0;
+}
+
+.short-answer-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.short-answer-term-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.short-answer-term-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #c8d9d6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.short-answer-term-card span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.terms-prominent {
+  box-shadow: 0 0 0 3px rgba(20, 108, 102, .14);
+}
+
 .feedback-list {
   display: grid;
   grid-template-columns: minmax(120px, .35fr) minmax(0, 1fr);
@@ -894,6 +958,7 @@ textarea {
   .type-grid,
   .feedback-list,
   .progress-columns,
+  .short-answer-columns,
   .compact-metrics,
   .matching-row,
   .category-item-row,

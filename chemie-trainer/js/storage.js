@@ -54,6 +54,7 @@
     correct: 0,
     incorrect: 0,
     totalAnswerMs: 0,
+    selfOverrideCount: 0,
     topicStats: {
       luft: { seen: 0, correct: 0, incorrect: 0 },
       wasser: { seen: 0, correct: 0, incorrect: 0 }
@@ -313,7 +314,8 @@
       incorrect: Math.max(0, Math.round(Number(source.incorrect) || 0)),
       lastResult: source.lastResult ? String(source.lastResult) : "",
       lastSeenAt: source.lastSeenAt ? String(source.lastSeenAt) : "",
-      selfOverrideCount: Math.max(0, Math.round(Number(source.selfOverrideCount) || 0))
+      selfOverrideCount: Math.max(0, Math.round(Number(source.selfOverrideCount) || 0)),
+      lastSelfOverride: Boolean(source.lastSelfOverride)
     };
   }
 
@@ -349,6 +351,7 @@
   function normalizeProgress(progress) {
     var source = progress && typeof progress === "object" ? progress : {};
     var perQuestion = normalizePerQuestion(source.perQuestion || source.questionStats);
+    var perQuestionOverrideCount = 0;
     var result = clone(DEFAULT_PROGRESS);
 
     if (source.version && source.version !== STORAGE_VERSION) {
@@ -371,6 +374,13 @@
     result.seen = Math.max(0, Math.round(Number(source.seen) || 0));
     result.correct = Math.max(0, Math.round(Number(source.correct) || 0));
     result.incorrect = Math.max(0, Math.round(Number(source.incorrect) || 0));
+    Object.keys(perQuestion).forEach(function countOverrides(questionId) {
+      perQuestionOverrideCount += Math.max(0, Math.round(Number(perQuestion[questionId].selfOverrideCount) || 0));
+    });
+    result.selfOverrideCount = Math.max(
+      Math.max(0, Math.round(Number(source.selfOverrideCount) || 0)),
+      perQuestionOverrideCount
+    );
 
     if (result.seen === 0 && Object.keys(perQuestion).length > 0) {
       Object.keys(perQuestion).forEach(function addStats(id) {
