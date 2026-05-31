@@ -412,6 +412,11 @@
     return normalized;
   }
 
+  function resetProgress() {
+    removeKey(CHEMIE_STORAGE_KEYS.progress);
+    return loadProgress();
+  }
+
   function resetAll() {
     removeKey(CHEMIE_STORAGE_KEYS.currentGame);
     removeKey(CHEMIE_STORAGE_KEYS.progress);
@@ -447,6 +452,7 @@
     clearCurrentGame: clearCurrentGame,
     loadProgress: loadProgress,
     saveProgress: saveProgress,
+    resetProgress: resetProgress,
     resetAll: resetAll,
     getDiagnostics: getDiagnostics,
     clearDiagnostics: clearDiagnostics

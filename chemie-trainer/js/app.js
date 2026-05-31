@@ -16,6 +16,8 @@
   var validation = null;
   var answerLocked = false;
   var dictionaryTermFilterIds = null;
+  var dictionarySearchText = "";
+  var dictionaryCategoryFilter = "";
   var loggedExplanationFallbacks = {};
   var EMPTY_SHORT_ANSWER_TEXT = "Ответ пустой. Сначала напиши 1–3 предложения или выбери “не засчитывать”.";
   var SHORT_ANSWER_WARNING_TEXT = "Автоматическая проверка не нашла нужные Fachbegriffe. Ты уверен, что честно оцениваешь качество своего ответа?";
@@ -435,8 +437,8 @@
       beginGame();
     });
     byId("resetProgress").addEventListener("click", function resetProgress() {
-      progress = Storage.resetAll();
-      showStatus("Прогресс сброшен. Настройки сохранены.", "ok");
+      progress = Storage.resetProgress ? Storage.resetProgress() : Storage.resetAll();
+      showStatus("Прогресс сброшен. Настройки и сохраненная партия не изменены.", "ok");
       renderStart();
     });
 
@@ -1846,6 +1848,193 @@
     return weak;
   }
 
+  function uniqueStrings(values) {
+    var seen = {};
+    var result = [];
+    asArray(values).forEach(function add(value) {
+      var key = String(value || "");
+      if (key && !seen[key]) {
+        seen[key] = true;
+        result.push(key);
+      }
+    });
+    return result;
+  }
+
+  function progressQuestionStats(sourceProgress, questionId) {
+    var stats = sourceProgress && (sourceProgress.perQuestion || sourceProgress.questionStats);
+    return stats && stats[questionId] ? stats[questionId] : {};
+  }
+
+  function questionAccuracyValue(stats) {
+    var seen = Math.max(0, Math.round(Number(stats && stats.seen) || 0));
+    var correct = Math.max(0, Math.round(Number(stats && stats.correct) || 0));
+    return seen ? correct / seen : 0;
+  }
+
+  function buildSubtopicStats(sourceProgress) {
+    var result = {};
+    var perQuestion = sourceProgress && (sourceProgress.perQuestion || sourceProgress.questionStats) || {};
+
+    Object.keys(perQuestion).forEach(function addQuestion(questionId) {
+      var question = getQuestionById(questionId);
+      var stats = perQuestion[questionId] || {};
+      var name = question && question.subtopic ? question.subtopic : "Ohne Subtopic";
+      if (!result[name]) {
+        result[name] = { seen: 0, correct: 0, incorrect: 0, questionIds: [] };
+      }
+      result[name].seen += Math.max(0, Math.round(Number(stats.seen) || 0));
+      result[name].correct += Math.max(0, Math.round(Number(stats.correct) || 0));
+      result[name].incorrect += Math.max(0, Math.round(Number(stats.incorrect) || 0));
+      result[name].questionIds.push(questionId);
+    });
+
+    return result;
+  }
+
+  function getWeakQuestionEntries(sourceProgress, limit) {
+    var perQuestion = sourceProgress && (sourceProgress.perQuestion || sourceProgress.questionStats) || {};
+    var ids = uniqueStrings(Object.keys(perQuestion).concat(asArray(sourceProgress && sourceProgress.mistakeIds)));
+    var mistakeMap = {};
+    asArray(sourceProgress && sourceProgress.mistakeIds).forEach(function mark(id) {
+      mistakeMap[String(id)] = true;
+    });
+
+    var entries = ids.map(function mapId(questionId) {
+      var question = getQuestionById(questionId);
+      var stats = progressQuestionStats(sourceProgress, questionId);
+      var seen = Math.max(0, Math.round(Number(stats.seen) || 0));
+      var correct = Math.max(0, Math.round(Number(stats.correct) || 0));
+      var incorrect = Math.max(0, Math.round(Number(stats.incorrect) || 0));
+      var weak = (incorrect > 0 && seen > 0 && correct / seen < 0.7) || mistakeMap[questionId];
+      return {
+        id: questionId,
+        question: question,
+        stats: { seen: seen, correct: correct, incorrect: incorrect },
+        accuracy: seen ? correct / seen : 0,
+        isMistake: Boolean(mistakeMap[questionId]),
+        weak: weak
+      };
+    }).filter(function keepWeak(entry) {
+      return entry.weak && entry.question;
+    });
+
+    entries.sort(function sortWeak(a, b) {
+      if (a.isMistake !== b.isMistake) {
+        return a.isMistake ? -1 : 1;
+      }
+      if (a.accuracy !== b.accuracy) {
+        return a.accuracy - b.accuracy;
+      }
+      return b.stats.incorrect - a.stats.incorrect;
+    });
+
+    return entries.slice(0, limit || entries.length);
+  }
+
+  function collectTermIdsForQuestions(questionIds) {
+    var result = [];
+    asArray(questionIds).forEach(function addQuestionTerms(questionId) {
+      var question = getQuestionById(questionId);
+      asArray(question && question.relatedTerms).forEach(function addTerm(termId) {
+        result.push(termId);
+      });
+    });
+    return uniqueStrings(result);
+  }
+
+  function getWeakTermIds(sourceProgress) {
+    var ids = getWeakQuestionEntries(sourceProgress, 10).map(function getId(entry) {
+      return entry.id;
+    });
+    return collectTermIdsForQuestions(ids);
+  }
+
+  function resetDictionaryFilters() {
+    dictionaryTermFilterIds = null;
+    dictionarySearchText = "";
+    dictionaryCategoryFilter = "";
+  }
+
+  function openDictionaryForTerms(termIds) {
+    dictionaryTermFilterIds = uniqueStrings(termIds);
+    dictionarySearchText = "";
+    dictionaryCategoryFilter = "";
+    setRoute("dictionary");
+  }
+
+  function normalizeLookup(value) {
+    return Engine && Engine.normalizeText
+      ? Engine.normalizeText(value)
+      : String(value == null ? "" : value).toLowerCase().trim();
+  }
+
+  function termMatchesSearch(term, query) {
+    if (!query) {
+      return true;
+    }
+    var articleTerm = ((term.article || "") + " " + (term.term || "")).trim();
+    var fields = [
+      term.term,
+      articleTerm,
+      term.ru,
+      term.de
+    ].concat(asArray(term.aliases));
+    var normalizedQuery = normalizeLookup(query);
+
+    return fields.some(function hasQuery(value) {
+      return normalizeLookup(value).indexOf(normalizedQuery) !== -1;
+    });
+  }
+
+  function dictionaryBaseTerms(allTerms) {
+    var filterMap = {};
+    asArray(dictionaryTermFilterIds).forEach(function mark(termId) {
+      filterMap[String(termId)] = true;
+    });
+    if (Object.keys(filterMap).length === 0) {
+      return allTerms.slice();
+    }
+    return allTerms.filter(function filterTerm(term) {
+      return term && filterMap[String(term.id)];
+    });
+  }
+
+  function filteredDictionaryTerms(allTerms) {
+    return dictionaryBaseTerms(allTerms).filter(function keepTerm(term) {
+      if (!term) {
+        return false;
+      }
+      if (dictionaryCategoryFilter && term.category !== dictionaryCategoryFilter) {
+        return false;
+      }
+      return termMatchesSearch(term, dictionarySearchText);
+    });
+  }
+
+  function renderTermButtons(termIds, emptyText) {
+    var ids = uniqueStrings(termIds).filter(function knownTerm(termId) {
+      return Boolean(getTermById(termId));
+    });
+    if (ids.length === 0) {
+      return emptyText ? '<p class="muted">' + esc(emptyText) + '</p>' : "";
+    }
+    return '<div class="term-link-list">' + ids.map(function renderButton(termId) {
+      return '<button class="term-link" type="button" data-term-filter="' + esc(termId) + '">' + esc(termLabel(termId)) + '</button>';
+    }).join("") + '</div>';
+  }
+
+  function renderQuestionLinks(questionIds, emptyText) {
+    var ids = uniqueStrings(questionIds);
+    if (ids.length === 0) {
+      return emptyText ? '<p class="muted">' + esc(emptyText) + '</p>' : "";
+    }
+    return '<ul class="question-link-list">' + ids.map(function renderQuestionLink(questionId) {
+      var question = getQuestionById(questionId);
+      return '<li><strong>' + esc(questionId) + '</strong> - ' + esc(questionTitle(question)) + '</li>';
+    }).join("") + '</ul>';
+  }
+
   function continueAfterFeedback() {
     var game = Storage.loadCurrentGame();
     if (!game || game.status !== "playing") {
@@ -1922,6 +2111,8 @@
     var result = game.result || {};
     var weak = progress.weakSubtopics || {};
     var weakList = Object.keys(weak).slice(0, 8);
+    var mistakeIds = asArray(progress.mistakeIds).slice(0, 10);
+    var weakTermIds = getWeakTermIds(progress);
 
     app.innerHTML = '' +
       '<section class="game-layout">' +
@@ -1945,7 +2136,20 @@
             '<div class="metric"><strong>' + percent(result.correct || 0, (result.correct || 0) + (result.incorrect || 0)) + '</strong><span>точность партии</span></div>' +
             '<div class="metric"><strong>' + esc(result.turns || 0) + '</strong><span>ходов</span></div>' +
           '</div>' +
-          '<div class="action-row"><button class="primary-btn" type="button" id="newGameAfterResult">Начать новую игру</button><button class="soft-btn" type="button" data-local-route="progress">Обзор прогресса</button><button class="danger-btn" type="button" id="clearFinishedGame">Убрать итог</button></div>' +
+          '<section class="result-section"><h2>Ошибки для повтора</h2>' +
+            (mistakeIds.length ? renderQuestionLinks(mistakeIds, "") : '<p class="muted">Сейчас нет сохраненных ошибок.</p>') +
+          '</section>' +
+          '<section class="result-section"><h2>Fachbegriffe из слабых мест</h2>' +
+            renderTermButtons(weakTermIds, "Слабые термины появятся после ошибок.") +
+          '</section>' +
+          '<div class="action-row">' +
+            '<button class="primary-btn" type="button" id="newGameAfterResult">Начать новую игру</button>' +
+            '<button class="soft-btn" type="button" data-local-route="progress">Обзор прогресса</button>' +
+            '<button class="soft-btn" type="button" data-local-route="answers">Готовые ответы</button>' +
+            (mistakeIds.length ? '<button class="soft-btn" type="button" data-local-route="fehler">Повторить ошибки</button>' : "") +
+            (weakTermIds.length ? '<button class="soft-btn" type="button" data-term-filter-list="' + esc(weakTermIds.join(",")) + '">Словарь по слабым терминам</button>' : "") +
+            '<button class="danger-btn" type="button" id="clearFinishedGame">Убрать итог</button>' +
+          '</div>' +
         '</aside>' +
       '</section>';
 
@@ -1964,36 +2168,90 @@
   function renderDictionary() {
     setHeader("Словарь", "Термины из банка данных");
     var allTerms = Array.isArray(DATA.terms) ? DATA.terms : [];
-    var filterMap = {};
-    asArray(dictionaryTermFilterIds).forEach(function mark(termId) {
-      filterMap[String(termId)] = true;
-    });
-    var hasFilter = Object.keys(filterMap).length > 0;
-    var terms = hasFilter
-      ? allTerms.filter(function filterTerm(term) {
-        return term && filterMap[String(term.id)];
-      })
-      : allTerms;
+    var baseTerms = dictionaryBaseTerms(allTerms);
+    var hasFilter = asArray(dictionaryTermFilterIds).length > 0;
+    var terms = filteredDictionaryTerms(allTerms);
+    var categories = uniqueStrings(allTerms.map(function getCategory(term) {
+      return term && term.category;
+    })).sort();
+
+    function renderDictionaryResults(items) {
+      return items.length
+        ? '<div class="card-grid dictionary-grid">' + items.map(renderTerm).join("") + '</div>'
+        : '<div class="empty-state"><h2>Ничего не найдено</h2><p>Попробуй другой немецкий термин, русский смысл, alias или категорию.</p></div>';
+    }
+
     app.innerHTML = '' +
       '<section class="panel list-panel">' +
-        '<div class="screen-head"><div><h1>Словарь терминов</h1><p>' + esc(hasFilter ? "Показаны термины, связанные с текущим вопросом." : "Сейчас показаны реальные карточки из CHEMIE_DATA.terms; поиск и фильтры будут отдельным шагом.") + '</p></div><div class="action-row">' +
+        '<div class="screen-head"><div><h1>Словарь терминов</h1><p>' + esc(hasFilter ? "Показаны термины, связанные с вопросом или слабым местом." : "Поиск работает по немецкому термину, артиклю с термином, русскому смыслу, немецкому определению и aliases.") + '</p></div><div class="action-row">' +
           (hasFilter ? '<button class="soft-btn" type="button" id="showAllTerms">Все термины</button>' : "") +
           '<button class="soft-btn" type="button" data-local-route="start">На старт</button>' +
         '</div></div>' +
-        (terms.length ? '<div class="card-grid">' + terms.map(renderTerm).join("") + '</div>' : '<div class="empty-state"><h2>Термины пока не добавлены</h2><p>Структура `CHEMIE_DATA.terms` готова для следующей сессии.</p></div>') +
+        (hasFilter ? '<div class="notice notice-info">Фильтр связанных терминов: ' + esc(baseTerms.length) + ' карточек. Кнопка «Все термины» возвращает полный словарь.</div>' : "") +
+        '<div class="dictionary-controls">' +
+          '<label class="field"><span>Поиск</span><input id="termSearch" type="search" value="' + esc(dictionarySearchText) + '" placeholder="Stoffgemisch, das Molekül, кислород, H2O"></label>' +
+          '<label class="field"><span>Категория</span><select id="termCategory"><option value="">Все категории</option>' +
+            categories.map(function renderCategory(category) {
+              return '<option value="' + esc(category) + '"' + (dictionaryCategoryFilter === category ? " selected" : "") + '>' + esc(category) + '</option>';
+            }).join("") +
+          '</select></label>' +
+          '<div class="dictionary-count"><strong id="dictionaryCount">' + esc(terms.length) + '</strong><span>из ' + esc(baseTerms.length) + ' терминов</span></div>' +
+        '</div>' +
+        '<div id="dictionaryResults">' + renderDictionaryResults(terms) + '</div>' +
       '</section>';
     wireLocalRouteButtons();
+
+    function refreshResults() {
+      var nextTerms = filteredDictionaryTerms(allTerms);
+      var resultsNode = byId("dictionaryResults");
+      var countNode = byId("dictionaryCount");
+      if (resultsNode) {
+        resultsNode.innerHTML = renderDictionaryResults(nextTerms);
+      }
+      if (countNode) {
+        countNode.textContent = String(nextTerms.length);
+      }
+      wireLocalRouteButtons();
+    }
+
+    var search = byId("termSearch");
+    if (search) {
+      search.addEventListener("input", function onSearch() {
+        dictionarySearchText = search.value;
+        refreshResults();
+      });
+    }
+    var category = byId("termCategory");
+    if (category) {
+      category.addEventListener("change", function onCategory() {
+        dictionaryCategoryFilter = category.value;
+        refreshResults();
+      });
+    }
     var showAll = byId("showAllTerms");
     if (showAll) {
       showAll.addEventListener("click", function clearTermFilter() {
-        dictionaryTermFilterIds = null;
+        resetDictionaryFilters();
         renderDictionary();
       });
     }
   }
 
   function renderTerm(term) {
-    return '<article class="mini-card"><p class="eyebrow">' + esc(term.category || "") + '</p><h2>' + esc(term.term || term.id) + '</h2><p>' + esc(term.ru || "") + '</p><p class="muted">' + esc(term.de || "") + '</p></article>';
+    return '' +
+      '<article class="mini-card term-card">' +
+        '<p class="eyebrow">' + esc(term.category || "") + '</p>' +
+        '<h2 lang="de">' + esc(term.term || term.id) + '</h2>' +
+        (term.article ? '<p class="term-article">Artikel: <strong lang="de">' + esc(term.article) + '</strong></p>' : "") +
+        '<dl class="term-definition-list">' +
+          '<dt>RU</dt><dd>' + esc(term.ru || "") + '</dd>' +
+          '<dt>DE</dt><dd lang="de">' + esc(term.de || "") + '</dd>' +
+          '<dt>Beispiel</dt><dd lang="de">' + esc(term.example || "") + '</dd>' +
+        '</dl>' +
+        (asArray(term.aliases).length ? '<p class="term-aliases"><strong>Aliases:</strong> ' + esc(asArray(term.aliases).join(", ")) + '</p>' : "") +
+        '<section><h3>Связанные термины</h3>' + renderTermButtons(term.relatedTermIds, "Нет связанных терминов.") + '</section>' +
+        '<section><h3>Связанные вопросы</h3>' + renderQuestionLinks(term.relatedQuestionIds, "Нет связанных вопросов.") + '</section>' +
+      '</article>';
   }
 
   function renderAnswers() {
@@ -2002,25 +2260,41 @@
     app.innerHTML = '' +
       '<section class="panel list-panel">' +
         '<div class="screen-head"><div><h1>Готовые немецкие ответы</h1><p>Короткие формулировки для повторения тем Luft и Wasser.</p></div><button class="soft-btn" type="button" data-local-route="start">На старт</button></div>' +
-        (answers.length ? '<div class="card-grid">' + answers.map(renderReadyAnswer).join("") + '</div>' : '<div class="empty-state"><h2>Ответы пока не добавлены</h2><p>Экран и маршрут уже подготовлены.</p></div>') +
+        (answers.length ? '<div class="card-grid answer-card-grid">' + answers.map(renderReadyAnswer).join("") + '</div>' : '<div class="empty-state"><h2>Ответы пока не добавлены</h2><p>Экран и маршрут уже подготовлены.</p></div>') +
       '</section>';
     wireLocalRouteButtons();
   }
 
   function renderReadyAnswer(answer) {
-    return '<article class="mini-card"><p class="eyebrow">' + esc(answer.titleDe || answer.topic) + '</p><h2>' + esc(answer.titleRu || answer.id) + '</h2><p>' + esc(answer.answerDe || "") + '</p></article>';
+    return '' +
+      '<article class="mini-card ready-answer-card">' +
+        '<p class="eyebrow">' + esc(answer.topic || "") + '</p>' +
+        '<h2>' + esc(answer.titleRu || answer.id) + '</h2>' +
+        '<h3 lang="de">' + esc(answer.titleDe || "") + '</h3>' +
+        '<p class="ready-answer-text" lang="de">' + esc(answer.answerDe || "") + '</p>' +
+        '<p>' + esc(answer.meaningRu || "") + '</p>' +
+        (asArray(answer.keywords).length ? '<div class="meta-chips">' + asArray(answer.keywords).map(function keyword(text) {
+          return '<span>' + esc(text) + '</span>';
+        }).join("") + '</div>' : "") +
+        '<section><h3>Термины</h3>' + renderTermButtons(answer.relatedTermIds, "Нет связанных терминов.") + '</section>' +
+        '<section><h3>Вопросы</h3>' + renderQuestionLinks(answer.relatedQuestionIds, "Нет связанных вопросов.") + '</section>' +
+        (asArray(answer.relatedTermIds).length ? '<button class="soft-btn" type="button" data-term-filter-list="' + esc(asArray(answer.relatedTermIds).join(",")) + '">Открыть термины ответа</button>' : "") +
+      '</article>';
   }
 
   function renderProgress() {
     setHeader("Прогресс", "Обзор сохраненных результатов");
-    var luft = progress.topicStats.luft;
-    var wasser = progress.topicStats.wasser;
-    var weak = progress.weakSubtopics || {};
-    var weakNames = Object.keys(weak).slice(0, 10);
-    var mistakeQuestions = asArray(progress.mistakeIds).slice(0, 10).map(function mapMistake(id) {
-      var question = getQuestionById(id);
-      return '<li><strong>' + esc(id) + '</strong> - ' + esc(questionTitle(question)) + '</li>';
-    }).join("");
+    var topicStats = progress.topicStats || { luft: { seen: 0, correct: 0, incorrect: 0 }, wasser: { seen: 0, correct: 0, incorrect: 0 } };
+    var luft = topicStats.luft || { seen: 0, correct: 0, incorrect: 0 };
+    var wasser = topicStats.wasser || { seen: 0, correct: 0, incorrect: 0 };
+    var subtopicStats = buildSubtopicStats(progress);
+    var subtopicNames = Object.keys(subtopicStats).sort(function sortSubtopics(a, b) {
+      var accuracyDiff = questionAccuracyValue(subtopicStats[a]) - questionAccuracyValue(subtopicStats[b]);
+      return accuracyDiff !== 0 ? accuracyDiff : a.localeCompare(b);
+    });
+    var weakEntries = getWeakQuestionEntries(progress, 10);
+    var weakTermIds = getWeakTermIds(progress);
+    var mistakeIds = asArray(progress.mistakeIds);
 
     app.innerHTML = '' +
       '<section class="panel progress-panel">' +
@@ -2029,24 +2303,40 @@
           '<div class="metric"><strong>' + percent(progress.correct, progress.seen) + '</strong><span>общая точность</span></div>' +
           '<div class="metric"><strong>' + percent(luft.correct, luft.seen) + '</strong><span>Luft</span></div>' +
           '<div class="metric"><strong>' + percent(wasser.correct, wasser.seen) + '</strong><span>Wasser</span></div>' +
-          '<div class="metric"><strong>' + progress.mistakeIds.length + '</strong><span>ошибок для повтора</span></div>' +
+          '<div class="metric"><strong>' + mistakeIds.length + '</strong><span>ошибок для повтора</span></div>' +
           '<div class="metric"><strong>' + esc(progress.selfOverrideCount || 0) + '</strong><span>самооценок вопреки автопроверке</span></div>' +
         '</div>' +
         '<div class="progress-columns">' +
-          '<section><h2>Слабые подтемы</h2>' +
-            (weakNames.length ? '<ul class="weak-list">' + weakNames.map(function renderWeak(name) {
-              var item = weak[name];
-              return '<li><strong>' + esc(name) + '</strong> - точность ' + esc(percent(item.correct || 0, item.seen || 0)) + ', вопросов: ' + esc(asArray(item.questionIds).slice(0, 5).join(", ")) + '</li>';
-            }).join("") + '</ul>' : '<p class="muted">Пока нет слабых подтем.</p>') +
+          '<section><h2>Точность по subtopic</h2>' +
+            (subtopicNames.length ? '<ul class="weak-list">' + subtopicNames.map(function renderSubtopic(name) {
+              var item = subtopicStats[name];
+              return '<li><strong>' + esc(name) + '</strong> - ' + esc(percent(item.correct || 0, item.seen || 0)) + ', верно ' + esc(item.correct || 0) + ' из ' + esc(item.seen || 0) + '</li>';
+            }).join("") + '</ul>' : '<p class="muted">Пока нет данных по подтемам.</p>') +
           '</section>' +
-          '<section><h2>Ошибки</h2>' + (mistakeQuestions ? '<ul class="weak-list">' + mistakeQuestions + '</ul>' : '<p class="muted">Сейчас нет сохраненных ошибок.</p>') + '</section>' +
+          '<section><h2>5-10 слабых вопросов</h2>' +
+            (weakEntries.length ? '<ul class="weak-list">' + weakEntries.map(function renderWeakQuestion(entry) {
+              return '<li><strong>' + esc(entry.id) + '</strong> - ' + esc(questionTitle(entry.question)) + ' · точность ' + esc(percent(entry.stats.correct, entry.stats.seen)) + (entry.isMistake ? ' · в ошибках' : '') + '</li>';
+            }).join("") + '</ul>' : '<p class="muted">Слабые вопросы пока не накоплены.</p>') +
+          '</section>' +
         '</div>' +
-        '<div class="action-row"><button class="soft-btn" type="button" data-local-route="fehler">Повторить ошибки</button><button class="danger-btn" type="button" id="resetProgressInline">Сбросить прогресс</button></div>' +
+        '<section class="progress-terms"><h2>Fachbegriffe, связанные с ошибками</h2>' +
+          renderTermButtons(weakTermIds, "После ошибок здесь появятся термины для словаря.") +
+        '</section>' +
+        '<div class="action-row">' +
+          '<button class="soft-btn" type="button" data-local-route="fehler">Повторить ошибки</button>' +
+          (weakTermIds.length ? '<button class="soft-btn" type="button" data-term-filter-list="' + esc(weakTermIds.join(",")) + '">Открыть словарь по слабым терминам</button>' : '<button class="soft-btn" type="button" disabled>Открыть словарь по слабым терминам</button>') +
+          '<button class="danger-btn" type="button" id="resetProgressInline">Сбросить прогресс</button>' +
+          '<button class="danger-btn" type="button" id="clearCurrentGameInline">Сбросить сохраненную партию</button>' +
+        '</div>' +
       '</section>';
     wireLocalRouteButtons();
     byId("resetProgressInline").addEventListener("click", function resetInline() {
-      progress = Storage.resetAll();
+      progress = Storage.resetProgress ? Storage.resetProgress() : Storage.resetAll();
       renderProgress();
+    });
+    byId("clearCurrentGameInline").addEventListener("click", function clearInlineGame() {
+      Storage.clearCurrentGame();
+      showStatus("Сохраненная партия сброшена. Прогресс и настройки сохранены.", "ok");
     });
   }
 
@@ -2084,12 +2374,34 @@
 
   function wireLocalRouteButtons() {
     global.document.querySelectorAll("[data-local-route]").forEach(function wire(button) {
+      if (button.getAttribute("data-wired-route") === "true") {
+        return;
+      }
+      button.setAttribute("data-wired-route", "true");
       button.addEventListener("click", function go() {
         var route = button.getAttribute("data-local-route");
         if (route === "dictionary") {
-          dictionaryTermFilterIds = null;
+          resetDictionaryFilters();
         }
         setRoute(route);
+      });
+    });
+    global.document.querySelectorAll("[data-term-filter]").forEach(function wireTerm(button) {
+      if (button.getAttribute("data-wired-term") === "true") {
+        return;
+      }
+      button.setAttribute("data-wired-term", "true");
+      button.addEventListener("click", function openSingleTerm() {
+        openDictionaryForTerms([button.getAttribute("data-term-filter")]);
+      });
+    });
+    global.document.querySelectorAll("[data-term-filter-list]").forEach(function wireTermList(button) {
+      if (button.getAttribute("data-wired-term-list") === "true") {
+        return;
+      }
+      button.setAttribute("data-wired-term-list", "true");
+      button.addEventListener("click", function openTermList() {
+        openDictionaryForTerms(String(button.getAttribute("data-term-filter-list") || "").split(","));
       });
     });
   }
@@ -2140,7 +2452,7 @@
       }
       event.preventDefault();
       if (routeButton.getAttribute("data-route") === "dictionary") {
-        dictionaryTermFilterIds = null;
+        resetDictionaryFilters();
       }
       setRoute(routeButton.getAttribute("data-route"));
     });
