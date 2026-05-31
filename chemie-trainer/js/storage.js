@@ -7,6 +7,8 @@
     progress: "chemieConquest.progress.v2"
   };
 
+  var STORAGE_VERSION = 2;
+
   var ALLOWED_TYPES = [
     "single_choice",
     "multiple_choice",
@@ -30,7 +32,7 @@
   };
 
   var DEFAULT_SETTINGS = {
-    version: 2,
+    version: STORAGE_VERSION,
     topicMode: "gemischt",
     enabledTypes: "all",
     totalHexes: 24,
@@ -42,7 +44,12 @@
   };
 
   var DEFAULT_PROGRESS = {
-    version: 2,
+    version: STORAGE_VERSION,
+    perQuestion: {},
+    mistakeIds: [],
+    weakSubtopics: {},
+    viewedReadyAnswerIds: [],
+    mistakeCorrectStreaks: {},
     seen: 0,
     correct: 0,
     incorrect: 0,
@@ -51,13 +58,19 @@
       luft: { seen: 0, correct: 0, incorrect: 0 },
       wasser: { seen: 0, correct: 0, incorrect: 0 }
     },
-    questionStats: {},
-    mistakeIds: [],
-    mistakeStreaks: {}
+    questionStats: {}
   };
 
   var memoryStore = {};
   var storageAvailable = null;
+  var diagnostics = {
+    currentGameReset: false,
+    currentGameResetReason: "",
+    progressMigrated: false,
+    progressFallback: false,
+    settingsMigrated: false,
+    storageWriteFailed: false
+  };
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -100,16 +113,24 @@
     return storageAvailable;
   }
 
-  function readJson(key, fallback) {
-    var raw = null;
+  function readRaw(key) {
     try {
-      raw = isAvailable() ? getLocalStorage().getItem(key) : memoryStore[key];
-      if (!raw) {
-        return clone(fallback);
-      }
-      return JSON.parse(raw);
+      return isAvailable() ? getLocalStorage().getItem(key) : memoryStore[key] || null;
     } catch (error) {
-      return clone(fallback);
+      return memoryStore[key] || null;
+    }
+  }
+
+  function readRecord(key) {
+    var raw = readRaw(key);
+    if (!raw) {
+      return { ok: true, missing: true, value: null };
+    }
+
+    try {
+      return { ok: true, missing: false, value: JSON.parse(raw) };
+    } catch (error) {
+      return { ok: false, missing: false, value: null, error: error };
     }
   }
 
@@ -123,6 +144,7 @@
       }
       return true;
     } catch (error) {
+      diagnostics.storageWriteFailed = true;
       memoryStore[key] = raw;
       return false;
     }
@@ -134,7 +156,7 @@
         getLocalStorage().removeItem(key);
       }
     } catch (error) {
-      // Use in-memory fallback below.
+      diagnostics.storageWriteFailed = true;
     }
     delete memoryStore[key];
   }
@@ -167,12 +189,11 @@
 
   function normalizeTimerSeconds(source) {
     var result = {};
-    for (var i = 0; i < ALLOWED_TYPES.length; i += 1) {
-      var type = ALLOWED_TYPES[i];
+    ALLOWED_TYPES.forEach(function normalizeType(type) {
       var fallback = DEFAULT_TIMER_SECONDS[type];
       var value = source && hasOwn(source, type) ? Number(source[type]) : fallback;
       result[type] = Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
-    }
+    });
     return result;
   }
 
@@ -195,9 +216,14 @@
       : DEFAULT_SETTINGS.topicMode;
     var timerMode = source.timerMode === "hard" ? "hard" : "soft";
 
+    if (source.version && source.version !== STORAGE_VERSION) {
+      diagnostics.settingsMigrated = true;
+      messages.push("Настройки обновлены до версии " + STORAGE_VERSION + ".");
+    }
+
     return {
       settings: {
-        version: 2,
+        version: STORAGE_VERSION,
         topicMode: topicMode,
         enabledTypes: normalizeEnabledTypes(source.enabledTypes),
         totalHexes: totalHexes,
@@ -212,8 +238,12 @@
   }
 
   function loadSettings() {
-    var stored = readJson(CHEMIE_STORAGE_KEYS.settings, DEFAULT_SETTINGS);
-    return normalizeSettings(stored).settings;
+    var record = readRecord(CHEMIE_STORAGE_KEYS.settings);
+    var normalized = normalizeSettings(record.ok ? record.value : null);
+    if (!record.ok || diagnostics.settingsMigrated) {
+      saveSettings(normalized.settings);
+    }
+    return normalized.settings;
   }
 
   function saveSettings(settings) {
@@ -222,37 +252,131 @@
     return normalized;
   }
 
+  function markCurrentGameReset(reason) {
+    diagnostics.currentGameReset = true;
+    diagnostics.currentGameResetReason = reason;
+  }
+
   function loadCurrentGame() {
-    return readJson(CHEMIE_STORAGE_KEYS.currentGame, null);
+    var record = readRecord(CHEMIE_STORAGE_KEYS.currentGame);
+    if (record.missing) {
+      return null;
+    }
+    if (!record.ok) {
+      clearCurrentGame();
+      markCurrentGameReset("Сохраненная партия повреждена и была сброшена.");
+      return null;
+    }
+    if (!record.value || typeof record.value !== "object" || record.value.version !== STORAGE_VERSION) {
+      clearCurrentGame();
+      markCurrentGameReset("Сохраненная партия была создана другой версией и сброшена.");
+      return null;
+    }
+    return record.value;
   }
 
   function saveCurrentGame(gameState) {
-    return writeJson(CHEMIE_STORAGE_KEYS.currentGame, gameState || null);
+    if (!gameState) {
+      clearCurrentGame();
+      return true;
+    }
+    var copy = clone(gameState);
+    copy.version = STORAGE_VERSION;
+    return writeJson(CHEMIE_STORAGE_KEYS.currentGame, copy);
   }
 
   function clearCurrentGame() {
     removeKey(CHEMIE_STORAGE_KEYS.currentGame);
   }
 
+  function uniqueStrings(values) {
+    var seen = {};
+    var result = [];
+    if (!Array.isArray(values)) {
+      return result;
+    }
+    values.forEach(function add(value) {
+      var key = String(value || "");
+      if (key && !hasOwn(seen, key)) {
+        seen[key] = true;
+        result.push(key);
+      }
+    });
+    return result;
+  }
+
+  function normalizeQuestionEntry(entry) {
+    var source = entry && typeof entry === "object" ? entry : {};
+    return {
+      seen: Math.max(0, Math.round(Number(source.seen) || 0)),
+      correct: Math.max(0, Math.round(Number(source.correct) || 0)),
+      incorrect: Math.max(0, Math.round(Number(source.incorrect) || 0)),
+      lastResult: source.lastResult ? String(source.lastResult) : "",
+      lastSeenAt: source.lastSeenAt ? String(source.lastSeenAt) : "",
+      selfOverrideCount: Math.max(0, Math.round(Number(source.selfOverrideCount) || 0))
+    };
+  }
+
+  function normalizePerQuestion(source) {
+    var result = {};
+    var stats = source && typeof source === "object" ? source : {};
+    Object.keys(stats).forEach(function normalizeId(questionId) {
+      if (!questionId) {
+        return;
+      }
+      result[questionId] = normalizeQuestionEntry(stats[questionId]);
+    });
+    return result;
+  }
+
+  function normalizeTopicStats(source) {
+    var result = clone(DEFAULT_PROGRESS.topicStats);
+    if (!source || typeof source !== "object") {
+      return result;
+    }
+
+    ["luft", "wasser"].forEach(function normalizeTopic(topic) {
+      var item = source[topic] || {};
+      result[topic] = {
+        seen: Math.max(0, Math.round(Number(item.seen) || 0)),
+        correct: Math.max(0, Math.round(Number(item.correct) || 0)),
+        incorrect: Math.max(0, Math.round(Number(item.incorrect) || 0))
+      };
+    });
+    return result;
+  }
+
   function normalizeProgress(progress) {
     var source = progress && typeof progress === "object" ? progress : {};
+    var perQuestion = normalizePerQuestion(source.perQuestion || source.questionStats);
     var result = clone(DEFAULT_PROGRESS);
+
+    if (source.version && source.version !== STORAGE_VERSION) {
+      diagnostics.progressMigrated = true;
+    }
+
+    result.perQuestion = perQuestion;
+    result.questionStats = perQuestion;
+    result.mistakeIds = uniqueStrings(source.mistakeIds);
+    result.weakSubtopics = source.weakSubtopics && typeof source.weakSubtopics === "object"
+      ? clone(source.weakSubtopics)
+      : {};
+    result.viewedReadyAnswerIds = uniqueStrings(source.viewedReadyAnswerIds);
+    result.mistakeCorrectStreaks = source.mistakeCorrectStreaks && typeof source.mistakeCorrectStreaks === "object"
+      ? clone(source.mistakeCorrectStreaks)
+      : {};
+    result.topicStats = normalizeTopicStats(source.topicStats);
+    result.totalAnswerMs = Math.max(0, Math.round(Number(source.totalAnswerMs) || 0));
+
     result.seen = Math.max(0, Math.round(Number(source.seen) || 0));
     result.correct = Math.max(0, Math.round(Number(source.correct) || 0));
     result.incorrect = Math.max(0, Math.round(Number(source.incorrect) || 0));
-    result.totalAnswerMs = Math.max(0, Math.round(Number(source.totalAnswerMs) || 0));
-    result.questionStats = source.questionStats && typeof source.questionStats === "object" ? source.questionStats : {};
-    result.mistakeIds = Array.isArray(source.mistakeIds) ? source.mistakeIds.filter(Boolean) : [];
-    result.mistakeStreaks = source.mistakeStreaks && typeof source.mistakeStreaks === "object" ? source.mistakeStreaks : {};
 
-    if (source.topicStats && typeof source.topicStats === "object") {
-      ["luft", "wasser"].forEach(function normalizeTopic(topic) {
-        var item = source.topicStats[topic] || {};
-        result.topicStats[topic] = {
-          seen: Math.max(0, Math.round(Number(item.seen) || 0)),
-          correct: Math.max(0, Math.round(Number(item.correct) || 0)),
-          incorrect: Math.max(0, Math.round(Number(item.incorrect) || 0))
-        };
+    if (result.seen === 0 && Object.keys(perQuestion).length > 0) {
+      Object.keys(perQuestion).forEach(function addStats(id) {
+        result.seen += perQuestion[id].seen;
+        result.correct += perQuestion[id].correct;
+        result.incorrect += perQuestion[id].incorrect;
       });
     }
 
@@ -260,7 +384,16 @@
   }
 
   function loadProgress() {
-    return normalizeProgress(readJson(CHEMIE_STORAGE_KEYS.progress, DEFAULT_PROGRESS));
+    var record = readRecord(CHEMIE_STORAGE_KEYS.progress);
+    if (!record.ok) {
+      diagnostics.progressFallback = true;
+      return normalizeProgress(null);
+    }
+    var normalized = normalizeProgress(record.value);
+    if (!record.missing && diagnostics.progressMigrated) {
+      saveProgress(normalized);
+    }
+    return normalized;
   }
 
   function saveProgress(progress) {
@@ -275,6 +408,19 @@
     return loadProgress();
   }
 
+  function getDiagnostics() {
+    return clone(diagnostics);
+  }
+
+  function clearDiagnostics() {
+    diagnostics.currentGameReset = false;
+    diagnostics.currentGameResetReason = "";
+    diagnostics.progressMigrated = false;
+    diagnostics.progressFallback = false;
+    diagnostics.settingsMigrated = false;
+    diagnostics.storageWriteFailed = false;
+  }
+
   global.CHEMIE_STORAGE_KEYS = CHEMIE_STORAGE_KEYS;
   global.ChemieStorage = {
     keys: CHEMIE_STORAGE_KEYS,
@@ -283,6 +429,7 @@
     allowedTypes: ALLOWED_TYPES.slice(),
     isAvailable: isAvailable,
     normalizeSettings: normalizeSettings,
+    normalizeProgress: normalizeProgress,
     loadSettings: loadSettings,
     saveSettings: saveSettings,
     loadCurrentGame: loadCurrentGame,
@@ -290,6 +437,8 @@
     clearCurrentGame: clearCurrentGame,
     loadProgress: loadProgress,
     saveProgress: saveProgress,
-    resetAll: resetAll
+    resetAll: resetAll,
+    getDiagnostics: getDiagnostics,
+    clearDiagnostics: clearDiagnostics
   };
 })(typeof window !== "undefined" ? window : globalThis);

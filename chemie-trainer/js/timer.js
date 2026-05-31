@@ -142,17 +142,19 @@
       return;
     }
 
-    var softRatio = clamp(elapsed / (SOFT_FILL_SECONDS * 1000), 0, 1);
+    var softLimitMs = totalMs > 0 ? totalMs : SOFT_FILL_SECONDS * 1000;
+    var softRatio = clamp(elapsed / softLimitMs, 0, 1);
     var elapsedSeconds = Math.floor(elapsed / 1000);
+    var overtime = elapsed >= softLimitMs;
 
     setFillWidth(softRatio * 100);
-    setText(formatSeconds(elapsedSeconds));
-    setFillColor(softRatio < 0.5 ? "timer-green" : "timer-yellow");
-    setPulse(false);
+    setText(overtime ? formatSeconds(elapsedSeconds) + "+" : formatSeconds(elapsedSeconds));
+    setFillColor(overtime ? "timer-red" : (softRatio < 0.5 ? "timer-green" : "timer-yellow"));
+    setPulse(overtime);
   }
 
   function fireTimeUpIfNeeded() {
-    if (!hardMode || timeUpFired) {
+    if (timeUpFired) {
       return;
     }
 
@@ -161,11 +163,16 @@
     }
 
     timeUpFired = true;
-    stopInterval();
-    running = false;
-    paused = false;
-    elapsedBeforePauseMs = totalMs;
-    render(elapsedBeforePauseMs);
+
+    if (hardMode) {
+      stopInterval();
+      running = false;
+      paused = false;
+      elapsedBeforePauseMs = totalMs;
+      render(elapsedBeforePauseMs);
+    } else {
+      render(getElapsedMsInternal());
+    }
 
     if (typeof onTimeUpHandler === "function") {
       onTimeUpHandler();
@@ -255,6 +262,9 @@
     stopInterval();
     running = false;
     paused = false;
+    hardMode = false;
+    totalSeconds = SOFT_FILL_SECONDS;
+    totalMs = SOFT_FILL_SECONDS * 1000;
     elapsedBeforePauseMs = 0;
     startedAtMs = 0;
     timeUpFired = false;
